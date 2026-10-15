@@ -5,13 +5,20 @@
 ### Novità
 - **Lingue con file esterni.** Tutti i testi (interfaccia, log, riepiloghi, riga di comando) passano dai file `lang\<codice>.json` accanto al programma, modificabili da chiunque senza ricompilare.
   - Incluso l'**inglese** (`lang\en.json`); l'italiano resta incorporato e predefinito.
-  - Si sceglie dal menu della lingua in alto a destra; la scelta si applica al riavvio. CLI: `--lang en`, la variabile `ADBSYNC_LANG` oppure la lingua scelta nell'interfaccia grafica.
+  - Si sceglie dal menu **🌐 Lingua**; la scelta si applica al riavvio. CLI: `--lang en`, la variabile `ADBSYNC_LANG` oppure la lingua scelta nell'interfaccia grafica.
   - Un testo non tradotto resta in italiano; una traduzione che altera i segnaposto `{0}` viene ignorata e segnalata nel log.
   - Numeri e date seguono il formato della lingua.
 - **File esclusi visibili.** Prima i file scartati dalle regole di esclusione (per esempio le miniature `.thumbnails/`) sparivano senza traccia, e "0 da copiare" sembrava un errore della scansione.
   - Ora compaiono nella categoria **Esclusi**, con la regola che li ha esclusi; sono compresi i file presenti solo sul PC.
   - I conteggi sono nel riepilogo del confronto e nel log, regola per regola.
   - La finestra Esclusioni spiega le regole predefinite e che le regole valgono a partire dalla cartella scelta sul telefono.
+- **Barra dei menu**:
+  - *File*: cartelle dei log e del programma, Esci;
+  - *Strumenti*: Esclusioni e comandi adb;
+  - *🌐 Lingua*: scelta della lingua e cartella delle lingue;
+  - *Aiuto*: guida online (F1), guida nel programma (README), pagina del progetto su GitHub, segnalazioni, versioni, Informazioni.
+  - Gli indirizzi non sono scritti nel codice: si leggono da `adbsync.ini` accanto al programma, e chi pubblica una versione derivata cambia solo quel file.
+- **Pulsanti più chiari**: 🔍 *Confronta* (analizza, non scrive nulla), ▶ *Sincronizza* (avvia la copia), ■ *Annulla* (ferma).
 - **Elenco dei nomi convertiti.** Quando un nome contiene caratteri non ammessi su Windows (exFAT/NTFS), ogni sincronizzazione scrive `logs\nomi_convertiti_<data>.txt`. Contiene il tipo, il percorso originale sul telefono, il percorso salvato sul PC e l'esito, anche per le cartelle. Il percorso del file compare nel riepilogo finale e nella riga di comando.
 
 ### Altro

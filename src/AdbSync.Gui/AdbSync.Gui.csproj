@@ -25,6 +25,7 @@
   <!-- file di lingua esterni, modificabili: copiati in lang\ accanto all'eseguibile -->
   <ItemGroup>
     <None Include="..\..\lang\*.json" Link="lang\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Include="..\..\adbsync.ini" Link="adbsync.ini" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>

@@ -2,7 +2,7 @@
 
 [English](README.md) · **Italiano**
 
-> **Lingua:** il programma parla **italiano** (incorporato) e **inglese** (`lang\en.json`). Si sceglie dal menu della lingua in alto a destra e si applica al riavvio. Chiunque può aggiungere una lingua con un file JSON: vedi [Traduzioni](#10-traduzioni).
+> **Lingua:** il programma parla **italiano** (incorporato) e **inglese** (`lang\en.json`). Si sceglie dal menu **🌐 Lingua** e si applica al riavvio. Chiunque può aggiungere una lingua con un file JSON: vedi [Traduzioni](#10-traduzioni).
 
 Copia **incrementale** dei file da uno smartphone Android al PC, via **ADB** invece che via MTP.
 Confronta le due cartelle come FreeFileSync e copia **solo i file nuovi o modificati**, con verifica, ritentativi automatici e uno stato dettagliato.
@@ -23,6 +23,7 @@ Modalità di questa versione: **Aggiorna, telefono → PC**. Copia i file nuovi 
 ```
 AdbSync\
   AdbSync.exe, adbsync-cli.exe, README.md (EN), README.it.md (IT), CHANGELOG.md
+  adbsync.ini      collegamenti del menu Aiuto (pagina del progetto, guida online, segnalazioni)
   lang\en.json     traduzione inglese (qui si aggiungono altre lingue)
   data\settings.json
   logs\            log, report CSV, elenchi nomi_convertiti_*, cartelle diagnostica_*
@@ -38,7 +39,7 @@ Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *
 ## 2. Uso
 
 1. Scegli il **telefono**, la **cartella sul telefono** (es. `/sdcard/DCIM`; *Sfoglia…* naviga le cartelle del telefono) e la **cartella sul PC**.
-2. Premi **① Confronta**. In pochi secondi vedi l'elenco dei file divisi per categoria:
+2. Premi **🔍 Confronta**. In pochi secondi vedi l'elenco dei file divisi per categoria:
 
    | Categoria | Significato | Azione |
    |---|---|---|
@@ -55,8 +56,8 @@ Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *
 
    Sopra l'elenco c'è il riepilogo dei conteggi, **file e cartelle** separati per telefono e PC, da confrontare direttamente con FreeFileSync. FreeFileSync conta le cartelle come elementi.
 
-   **Elenco acquisito, niente nuove scansioni.** Dopo il Confronta l'elenco di telefono e PC resta in memoria. Se cambi un'opzione (confronto, conflitti, esclusioni, allineamento date) il piano si ricalcola dall'elenco in pochi secondi, senza riscansionare. Si riscansiona solo cambiando telefono o cartelle, oppure premendo di nuovo ① Confronta. Con 1.000.000 di file l'elenco occupa circa 400 MB di RAM e il ricalcolo richiede alcuni secondi.
-3. Premi **② Sincronizza**. Il riquadro *Stato* mostra:
+   **Elenco acquisito, niente nuove scansioni.** Dopo il Confronta l'elenco di telefono e PC resta in memoria. Se cambi un'opzione (confronto, conflitti, esclusioni, allineamento date) il piano si ricalcola dall'elenco in pochi secondi, senza riscansionare. Si riscansiona solo cambiando telefono o cartelle, oppure premendo di nuovo Confronta. Con 1.000.000 di file l'elenco occupa circa 400 MB di RAM e il ricalcolo richiede alcuni secondi.
+3. Premi **▶ Sincronizza**. Il riquadro *Stato* mostra:
    - la percentuale e i byte copiati sul totale;
    - la velocità e il tempo stimato rimanente;
    - i file copiati, gli errori definitivi e quelli in attesa di un nuovo tentativo;

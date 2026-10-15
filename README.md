@@ -7,7 +7,7 @@ It compares the two folders the way FreeFileSync does and copies **only new or c
 
 Mode of this version: **Update, phone → PC**. New and changed files are copied; **nothing is ever deleted**, neither on the PC nor on the phone.
 
-> **Language:** the program speaks **Italian** (built in) and **English** (`lang\en.json`). Choose it from the language box at the top right; it applies at the next start. Translations are plain JSON files anyone can add: see [Translations](#10-translations). Below, UI names are given in English with the Italian label in brackets.
+> **Language:** the program speaks **Italian** (built in) and **English** (`lang\en.json`). Choose it from the **🌐 Language** menu; it applies at the next start. Translations are plain JSON files anyone can add: see [Translations](#10-translations). Below, UI names are given in English with the Italian label in brackets.
 
 ---
 
@@ -23,6 +23,7 @@ Mode of this version: **Update, phone → PC**. New and changed files are copied
 ```
 AdbSync\
   AdbSync.exe, adbsync-cli.exe, README.md (EN), README.it.md (IT), CHANGELOG.md
+  adbsync.ini      links used by the Help menu (project page, online help, issues)
   lang\en.json     English translation (add more languages here)
   data\settings.json
   logs\            logs, CSV reports, nomi_convertiti_* lists, diagnostica_* folders
@@ -38,7 +39,7 @@ To move or delete the program folder while adb is running: menu *adb… → Arre
 ## 2. Usage
 
 1. Choose the **phone**, the **phone folder** (e.g. `/sdcard/DCIM`; *Sfoglia…* / Browse navigates the phone's folders) and the **PC folder**.
-2. Press **① Confronta** (Compare). Within seconds you get the file list grouped by category:
+2. Press **🔍 Compare** (*Confronta*). Within seconds you get the file list grouped by category:
 
    | Category (UI label) | Meaning | Action |
    |---|---|---|
@@ -55,8 +56,8 @@ To move or delete the program folder while adb is running: menu *adb… → Arre
 
    Above the list, a summary shows **file and folder** counts for phone and PC separately, for a direct comparison with FreeFileSync (which counts folders as items).
 
-   **Acquired list, no rescans.** After Compare, the phone and PC listings stay in memory. Changing an option (compare mode, conflicts, exclusions, date alignment) recalculates the plan from that listing in seconds, without rescanning. A rescan happens only when you change phone or folders, or press ① Compare again. With 1,000,000 files the listing takes about 400 MB of RAM and a recalculation takes a few seconds.
-3. Press **② Sincronizza** (Sync). The *Stato* (Status) panel shows:
+   **Acquired list, no rescans.** After Compare, the phone and PC listings stay in memory. Changing an option (compare mode, conflicts, exclusions, date alignment) recalculates the plan from that listing in seconds, without rescanning. A rescan happens only when you change phone or folders, or press Compare again. With 1,000,000 files the listing takes about 400 MB of RAM and a recalculation takes a few seconds.
+3. Press **▶ Sync** (*Sincronizza*). The *Stato* (Status) panel shows:
    - percentage and bytes copied out of the total;
    - speed and estimated time remaining;
    - files copied, permanent errors and files waiting for another attempt;

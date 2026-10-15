@@ -52,11 +52,13 @@ internal sealed class MainForm : Form
     private readonly Button _btnExcludes = new() { Text = L.T("Esclusioni..."), AutoSize = true };
     private readonly CheckBox _chkDiagnostic = new() { Text = L.T("Modalità diagnostica (elenchi completi nella cartella logs)"), AutoSize = true };
 
-    private readonly Button _btnCompare = new() { Text = L.T("① Confronta"), AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(8, 2, 8, 2) };
-    private readonly Button _btnSync = new() { Text = L.T("② Sincronizza"), AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(8, 2, 8, 2), Enabled = false };
-    private readonly Button _btnCancel = new() { Text = L.T("Annulla"), AutoSize = true, Enabled = false, Padding = new Padding(8, 2, 8, 2) };
+    private readonly Button _btnCompare = new() { Text = L.T("Confronta"), AutoSize = true, TextImageRelation = TextImageRelation.ImageBeforeText, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(8, 2, 8, 2) };
+    private readonly Button _btnSync = new() { Text = L.T("Sincronizza"), AutoSize = true, TextImageRelation = TextImageRelation.ImageBeforeText, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(8, 2, 8, 2), Enabled = false };
+    private readonly Button _btnCancel = new() { Text = L.T("Annulla"), AutoSize = true, TextImageRelation = TextImageRelation.ImageBeforeText, Enabled = false, Padding = new Padding(8, 2, 8, 2) };
     private readonly Button _btnAdb = new() { Text = "adb...", AutoSize = true };
-    private readonly ComboBox _cmbLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left };
+    private readonly MenuStrip _menu = new();
+    private readonly ToolStripMenuItem _menuTools = new();   // disattivato durante confronto e copia
+    private readonly AppConfig _config = AppConfig.Load();
     private readonly IReadOnlyList<string> _langMessages = Program.LanguageMessages;
     private readonly Label _lblAdb = new() { AutoSize = true, ForeColor = SystemColors.GrayText, Anchor = AnchorStyles.Left };
 
@@ -192,7 +194,7 @@ internal sealed class MainForm : Form
         tip.SetToolTip(_chkDiagnostic, L.T("A ogni confronto salva in logs\\diagnostica_<data> l'elenco completo dei file del telefono, del PC e del piano con il motivo di ogni decisione."));
 
         // --- pulsanti ---
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 7 };
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 6 };
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -205,9 +207,10 @@ internal sealed class MainForm : Form
         actions.Controls.Add(new Label(), 3, 0);
         actions.Controls.Add(_lblAdb, 4, 0);
         actions.Controls.Add(_btnAdb, 5, 0);
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        actions.Controls.Add(_cmbLang, 6, 0);
-        InitLanguageCombo();
+        int icon = S(20);
+        _btnCompare.Image = ButtonIcons.Compare(icon);
+        _btnSync.Image = ButtonIcons.Play(icon);
+        _btnCancel.Image = ButtonIcons.Stop(S(14));
         root.Controls.Add(actions, 0, 2);
 
         // --- scheda File ---
@@ -292,6 +295,102 @@ internal sealed class MainForm : Form
         _split.Panel2.Controls.Add(grpStatus);
 
         Controls.Add(root);
+        BuildMenu();
+        Controls.Add(_menu);   // aggiunto dopo: si aggancia in alto, sopra a tutto
+        MainMenuStrip = _menu;
+    }
+
+    // =====================================================================  MENU
+
+    private void BuildMenu()
+    {
+        var file = new ToolStripMenuItem(L.T("&File"));
+        file.DropDownItems.Add(L.T("Apri cartella log e report"), null, (_, _) => OpenFolder(SyncLogger.DefaultLogDirectory));
+        file.DropDownItems.Add(L.T("Apri cartella del programma"), null, (_, _) => OpenFolder(AppPaths.BaseDirectory));
+        file.DropDownItems.Add(new ToolStripSeparator());
+        file.DropDownItems.Add(L.T("&Esci"), null, (_, _) => Close());
+
+        var tools = _menuTools;
+        tools.Text = L.T("&Strumenti");
+        tools.DropDownItems.Add(L.T("Esclusioni..."), null, (_, _) => { if (!_busy) _btnExcludes.PerformClick(); });
+        tools.DropDownItems.Add(new ToolStripSeparator());
+        tools.DropDownItems.AddRange(AdbMenuItems());
+
+        // la voce della lingua ha sempre anche il globo: si riconosce anche senza capire la lingua attiva
+        var lang = new ToolStripMenuItem("🌐 " + L.T("&Lingua"));
+        foreach (var l in L.Available())
+        {
+            var item = new ToolStripMenuItem(l.Name) { Checked = l.Code.Equals(L.Code, StringComparison.OrdinalIgnoreCase), Tag = l };
+            item.Click += (_, _) => LanguageChanged(l);
+            lang.DropDownItems.Add(item);
+        }
+        lang.DropDownItems.Add(new ToolStripSeparator());
+        lang.DropDownItems.Add(L.T("Apri la cartella delle lingue (per aggiungerne una)"), null, (_, _) =>
+        {
+            Directory.CreateDirectory(L.LangDirectory);
+            OpenFolder(L.LangDirectory);
+        });
+
+        var help = new ToolStripMenuItem(L.T("&Aiuto"));
+        AddLink(help, L.T("Guida online"), "help", Keys.F1);
+        help.DropDownItems.Add(L.T("Guida nel programma (README)"), null, (_, _) => OpenLocalReadme());
+        help.DropDownItems.Add(new ToolStripSeparator());
+        AddLink(help, L.T("Pagina del progetto su GitHub"), "project");
+        AddLink(help, L.T("Segnala un problema o chiedi una funzione"), "issues");
+        AddLink(help, L.T("Versioni e aggiornamenti"), "releases");
+        help.DropDownItems.Add(new ToolStripSeparator());
+        help.DropDownItems.Add(L.T("Informazioni su AdbSync"), null, (_, _) => ShowAbout());
+
+        _menu.Items.AddRange(new ToolStripItem[] { file, tools, lang, help });
+    }
+
+    /// <summary>Voce di menu che apre un indirizzo preso da adbsync.ini; senza indirizzo la voce è disattivata.</summary>
+    private void AddLink(ToolStripMenuItem parent, string text, string key, Keys shortcut = Keys.None)
+    {
+        string? url = _config.Link(key);
+        var item = new ToolStripMenuItem(text) { Enabled = url is not null, ShortcutKeys = shortcut };
+        if (url is null) item.ToolTipText = L.F("Indirizzo \"{0}\" non presente in {1}", key, AppConfig.FilePath);
+        else
+        {
+            item.ToolTipText = url;
+            item.Click += (_, _) => OpenUrl(url);
+        }
+        parent.DropDownItems.Add(item);
+    }
+
+    private void OpenUrl(string url)
+    {
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch (Exception ex) { MessageBox.Show(this, L.F("Impossibile aprire {0}: {1}", url, ex.Message), "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+    }
+
+    private void OpenLocalReadme()
+    {
+        // README.it.md per l'italiano, README.md (inglese) per le altre lingue
+        string name = L.Code == L.DefaultCode ? "README.it.md" : "README.md";
+        string path = Path.Combine(AppPaths.BaseDirectory, name);
+        if (!File.Exists(path)) path = Path.Combine(AppPaths.BaseDirectory, "README.md");
+        if (!File.Exists(path))
+        {
+            MessageBox.Show(this, L.F("Guida non trovata nella cartella del programma: {0}", AppPaths.BaseDirectory), "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
+        catch { Process.Start(new ProcessStartInfo("notepad.exe", "\"" + path + "\"") { UseShellExecute = true }); }
+    }
+
+    private void ShowAbout()
+    {
+        string author = _config.Get("about", "author") ?? "";
+        string project = _config.Link("project") ?? "";
+        MessageBox.Show(this,
+            L.F("AdbSync {0}", AppVersion) + "\n" +
+            L.T("Copia incrementale Android → PC via ADB, senza MTP.") + "\n\n" +
+            L.T("Licenza MIT: software libero, fornito \"così com'è\", senza garanzie.") + "\n" +
+            (author.Length > 0 ? L.F("Sviluppato da {0} con Claude (Anthropic).", author) + "\n" : "") +
+            (project.Length > 0 ? "\n" + project + "\n" : "") +
+            "\n" + L.F("Lingua: {0}", L.Name) + "\n" + L.F("Cartella del programma: {0}", AppPaths.BaseDirectory),
+            L.T("Informazioni su AdbSync"), MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     /// <summary>Converte unità logiche (96 dpi) in pixel reali per schermi con scaling 125/150%.</summary>
@@ -463,18 +562,26 @@ internal sealed class MainForm : Form
     private void ShowAdbMenu()
     {
         var m = new ContextMenuStrip();
-        m.Items.Add(L.T("Scarica / aggiorna platform-tools ufficiali Google"), null, async (_, _) =>
+        m.Items.AddRange(AdbMenuItems());
+        m.Show(_btnAdb, new Point(0, _btnAdb.Height));
+    }
+
+    /// <summary>Voci del menu adb (usate dal pulsante "adb..." e dal menu Strumenti).</summary>
+    private ToolStripItem[] AdbMenuItems()
+    {
+        var m = new ToolStripMenuItem();
+        m.DropDownItems.Add(L.T("Scarica / aggiorna platform-tools ufficiali Google"), null, async (_, _) =>
         {
             var p = await DownloadAdbAsync();
             if (p is not null) { _settings.AdbPath = p; await InitAdbAsync(false); }
         });
-        m.Items.Add(L.T("Scegli adb.exe..."), null, async (_, _) =>
+        m.DropDownItems.Add(L.T("Scegli adb.exe..."), null, async (_, _) =>
         {
             var p = PickAdbExe();
             if (p is not null) { _settings.AdbPath = p; await InitAdbAsync(true); }
         });
-        m.Items.Add(L.T("Riavvia collegamento adb"), null, async (_, _) => await InitAdbAsync(true));
-        m.Items.Add(L.T("Arresta il server adb (libera la cartella del programma)"), null, (_, _) =>
+        m.DropDownItems.Add(L.T("Riavvia collegamento adb"), null, async (_, _) => await InitAdbAsync(true));
+        m.DropDownItems.Add(L.T("Arresta il server adb (libera la cartella del programma)"), null, (_, _) =>
         {
             if (_busy) return;
             if (_env is not null) AdbEnvironment.KillServer(_env.AdbPath);
@@ -482,9 +589,11 @@ internal sealed class MainForm : Form
             _lblAdb.Text = L.T("adb arrestato — premi Aggiorna per riavviarlo");
             _log.Info(L.T("Server adb arrestato."));
         });
-        m.Items.Add(new ToolStripSeparator());
-        m.Items.Add(L.T("Apri cartella log e report"), null, (_, _) => OpenFolder(SyncLogger.DefaultLogDirectory));
-        m.Show(_btnAdb, new Point(0, _btnAdb.Height));
+        m.DropDownItems.Add(new ToolStripSeparator());
+        m.DropDownItems.Add(L.T("Apri cartella log e report"), null, (_, _) => OpenFolder(SyncLogger.DefaultLogDirectory));
+        var items = m.DropDownItems.Cast<ToolStripItem>().ToArray();
+        m.DropDownItems.Clear();   // le voci passano al nuovo contenitore
+        return items;
     }
 
     private async Task RefreshDevicesAsync()
@@ -634,7 +743,7 @@ internal sealed class MainForm : Form
         var age = DateTime.Now - plan.ScannedAt;
         string ageNote = age.TotalMinutes > 60
             ? "\n\n" + L.F("L'elenco è stato acquisito {0} fa. Prima di scrivere, ogni file sul PC viene comunque ricontrollato; " +
-              "se nel frattempo sono cambiati file sul telefono, conviene rifare ① Confronta.", Format.Duration(age))
+              "se nel frattempo sono cambiati file sul telefono, conviene rifare Confronta.", Format.Duration(age))
             : "";
         if (confirm && MessageBox.Show(this,
                 L.F("Da fare: {0}.\n\nda  {1}:{2}\na   {3}\n\nNessun file verrà cancellato.", plan.WorkSummary, dev.DisplayName, plan.RemoteRoot, plan.LocalRoot) + ageNote,
@@ -740,28 +849,15 @@ internal sealed class MainForm : Form
 
     // =====================================================================  LINGUA
 
-    private bool _langInit;
-
-    private void InitLanguageCombo()
-    {
-        _langInit = true;
-        var langs = L.Available();
-        _cmbLang.Items.Clear();
-        foreach (var l in langs) _cmbLang.Items.Add(l);
-        _cmbLang.SelectedItem = langs.FirstOrDefault(l => l.Code.Equals(L.Code, StringComparison.OrdinalIgnoreCase)) ?? langs[0];
-        _cmbLang.Width = S(110);
-        _langInit = false;
-        _cmbLang.SelectedIndexChanged += (_, _) => LanguageChanged();
-    }
-
     /// <summary>La lingua si applica al riavvio: tutti i testi dell'interfaccia vengono creati all'avvio.</summary>
-    private void LanguageChanged()
+    private void LanguageChanged(LanguageInfo lang)
     {
-        if (_langInit || _cmbLang.SelectedItem is not LanguageInfo lang) return;
         if (lang.Code.Equals(_settings.Language, StringComparison.OrdinalIgnoreCase)) return;
         _settings.Language = lang.Code;
         SaveControlsIntoSettings();
         _settings.Save();
+        foreach (ToolStripItem i in ((ToolStripMenuItem)_menu.Items[2]).DropDownItems)
+            if (i is ToolStripMenuItem mi && mi.Tag is LanguageInfo li) mi.Checked = li.Code == lang.Code;
         // messaggio bilingue: la nuova lingua non è ancora caricata
         var answer = MessageBox.Show(this,
             "La lingua verrà applicata al prossimo avvio. Riavviare ora?\n\nThe language will be applied at the next start. Restart now?",
@@ -847,15 +943,16 @@ internal sealed class MainForm : Form
         _plan = null;
         _btnSync.Enabled = false;
         _lblPhase.ForeColor = SystemColors.ControlText;
-        _lblPhase.Text = L.T("Impostazioni cambiate: premi ① Confronta.");
+        _lblPhase.Text = L.T("Impostazioni cambiate: premi Confronta.");
     }
 
     private void SetBusy(bool busy, string? phase)
     {
         _busy = busy;
         foreach (var c in new Control[] { _btnCompare, _btnRefresh, _btnBrowseRemote, _btnBrowseLocal, _txtRemote, _txtLocal, _cmbDevice,
-                     _chkSizeOnly, _chkDst, _chkOverwrite, _chkVerify, _numParallel, _numStall, _numRetries, _btnExcludes, _btnAdb, _chkDiagnostic, _cmbAlign, _cmbLang })
+                     _chkSizeOnly, _chkDst, _chkOverwrite, _chkVerify, _numParallel, _numStall, _numRetries, _btnExcludes, _btnAdb, _chkDiagnostic, _cmbAlign })
             c.Enabled = !busy;
+        _menuTools.Enabled = !busy;
         _btnCancel.Enabled = busy && _cts is not null && !_cts.IsCancellationRequested;
         _btnSync.Enabled = !busy && _plan is { } p && p.HasWork;
         if (phase is not null)

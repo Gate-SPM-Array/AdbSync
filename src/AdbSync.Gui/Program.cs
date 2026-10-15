@@ -19,7 +19,7 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) =>
-            MessageBox.Show("Errore imprevisto:\n\n" + e.Exception.Message, "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(L.F("Errore imprevisto:\n\n{0}", e.Exception.Message), "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Error);
         Application.Run(new MainForm());
     }
 }

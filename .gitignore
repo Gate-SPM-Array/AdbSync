@@ -1,0 +1,16 @@
+# Build output
+bin/
+obj/
+publish/
+dist/
+*.user
+*.suo
+.vs/
+.idea/
+TestResults/
+
+# Runtime data of the portable app (never commit: may contain personal paths and device names)
+data/
+logs/
+platform-tools/
+*.adbsync-part

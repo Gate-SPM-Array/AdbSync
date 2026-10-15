@@ -1,0 +1,18 @@
+AdbSync utilizza i seguenti componenti di terze parti:
+
+AdvancedSharpAdbClient 3.6.16
+  https://github.com/SharpAdb/AdvancedSharpAdbClient
+  Licenza: Apache License 2.0 — https://www.apache.org/licenses/LICENSE-2.0
+
+.NET Runtime / Windows Forms
+  https://github.com/dotnet
+  Licenza: MIT
+
+Android SDK Platform-Tools (adb)
+  Non incluse nel pacchetto. Scaricate su richiesta dell'utente dal sito ufficiale Google
+  (https://dl.google.com/android/repository/) e soggette ai termini di licenza di Google
+  (https://developer.android.com/studio/terms).
+
+Nota: AdbSync è stato scritto da zero. Non contiene codice di FreeFileSync né di AdbFileManager:
+il primo è stato preso come riferimento funzionale (logica di confronto), il secondo come
+riferimento per l'idea di usare ADB al posto di MTP.

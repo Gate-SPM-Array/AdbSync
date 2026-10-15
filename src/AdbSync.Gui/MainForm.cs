@@ -24,6 +24,8 @@ internal sealed class MainForm : Form
     private SyncEngine? _engine;
     private CancellationTokenSource? _cts;
     private bool _busy;
+    /// <summary>Il messaggio di stato mostrato è quello di annullamento (da togliere a operazione finita).</summary>
+    private bool _statusMsgIsCancel;
     private volatile string? _compareStatus;
     private readonly Stopwatch _compareWatch = new();
     private List<SyncItem> _view = new();
@@ -32,27 +34,27 @@ internal sealed class MainForm : Form
 
     // --- controlli ---
     private readonly ComboBox _cmbDevice = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
-    private readonly Button _btnRefresh = new() { Text = "Aggiorna", AutoSize = true };
+    private readonly Button _btnRefresh = new() { Text = L.T("Aggiorna"), AutoSize = true };
     private readonly TextBox _txtRemote = new() { Dock = DockStyle.Fill };
-    private readonly Button _btnBrowseRemote = new() { Text = "Sfoglia...", AutoSize = true };
+    private readonly Button _btnBrowseRemote = new() { Text = L.T("Sfoglia..."), AutoSize = true };
     private readonly TextBox _txtLocal = new() { Dock = DockStyle.Fill };
-    private readonly Button _btnBrowseLocal = new() { Text = "Sfoglia...", AutoSize = true };
+    private readonly Button _btnBrowseLocal = new() { Text = L.T("Sfoglia..."), AutoSize = true };
 
-    private readonly CheckBox _chkSizeOnly = new() { Text = "Confronta solo la dimensione", AutoSize = true };
-    private readonly CheckBox _chkDst = new() { Text = "Ignora differenze di 1 ora (ora legale)", AutoSize = true };
-    private readonly CheckBox _chkVerify = new() { Text = "Verifica MD5 (più lento)", AutoSize = true };
-    private readonly CheckBox _chkOverwrite = new() { Text = "Sovrascrivi i conflitti", AutoSize = true };
+    private readonly CheckBox _chkSizeOnly = new() { Text = L.T("Confronta solo la dimensione"), AutoSize = true };
+    private readonly CheckBox _chkDst = new() { Text = L.T("Ignora differenze di 1 ora (ora legale)"), AutoSize = true };
+    private readonly CheckBox _chkVerify = new() { Text = L.T("Verifica MD5 (più lento)"), AutoSize = true };
+    private readonly CheckBox _chkOverwrite = new() { Text = L.T("Sovrascrivi i conflitti"), AutoSize = true };
     private readonly NumericUpDown _numParallel = new() { Minimum = 1, Maximum = 4, Width = 45 };
     private readonly NumericUpDown _numStall = new() { Minimum = 1, Maximum = 600, Width = 55 };
     private readonly ComboBox _cmbAlign = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly SplitContainer _split = new() { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, FixedPanel = FixedPanel.Panel2 };
     private readonly NumericUpDown _numRetries = new() { Minimum = 0, Maximum = 20, Width = 45 };
-    private readonly Button _btnExcludes = new() { Text = "Esclusioni...", AutoSize = true };
-    private readonly CheckBox _chkDiagnostic = new() { Text = "Modalità diagnostica (elenchi completi nella cartella logs)", AutoSize = true };
+    private readonly Button _btnExcludes = new() { Text = L.T("Esclusioni..."), AutoSize = true };
+    private readonly CheckBox _chkDiagnostic = new() { Text = L.T("Modalità diagnostica (elenchi completi nella cartella logs)"), AutoSize = true };
 
-    private readonly Button _btnCompare = new() { Text = "① Confronta", AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(8, 2, 8, 2) };
-    private readonly Button _btnSync = new() { Text = "② Sincronizza", AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(8, 2, 8, 2), Enabled = false };
-    private readonly Button _btnCancel = new() { Text = "Annulla", AutoSize = true, Enabled = false, Padding = new Padding(8, 2, 8, 2) };
+    private readonly Button _btnCompare = new() { Text = L.T("① Confronta"), AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(8, 2, 8, 2) };
+    private readonly Button _btnSync = new() { Text = L.T("② Sincronizza"), AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(8, 2, 8, 2), Enabled = false };
+    private readonly Button _btnCancel = new() { Text = L.T("Annulla"), AutoSize = true, Enabled = false, Padding = new Padding(8, 2, 8, 2) };
     private readonly Button _btnAdb = new() { Text = "adb...", AutoSize = true };
     private readonly ComboBox _cmbLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left };
     private readonly IReadOnlyList<string> _langMessages = Program.LanguageMessages;
@@ -66,17 +68,17 @@ internal sealed class MainForm : Form
     };
     private readonly FlowLayoutPanel _filters = new() { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true };
     private readonly Dictionary<ItemCategory, CheckBox> _filterChecks = new();
-    private readonly CheckBox _chkOnlyErrors = new() { Text = "Solo errori", AutoSize = true };
+    private readonly CheckBox _chkOnlyErrors = new() { Text = L.T("Solo errori"), AutoSize = true };
     private readonly TextBox _txtLog = new()
     {
         Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false,
         Font = new Font("Consolas", 9), BackColor = SystemColors.Window,
     };
-    private readonly CheckBox _chkDetailedLog = new() { Text = "Mostra dettagli (ogni file copiato)", AutoSize = true };
+    private readonly CheckBox _chkDetailedLog = new() { Text = L.T("Mostra dettagli (ogni file copiato)"), AutoSize = true };
     private readonly ListView _lvErrors = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true };
-    private readonly TabPage _tabErrors = new("Errori");
+    private readonly TabPage _tabErrors = new(L.T("Errori"));
 
-    private readonly Label _lblPhase = new() { AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Text = "Pronto" };
+    private readonly Label _lblPhase = new() { AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Text = L.T("Pronto") };
     private readonly Label _lblStatusMsg = new() { AutoSize = true, ForeColor = Color.DarkOrange, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
     private readonly ProgressBar _pbTotal = new() { Dock = DockStyle.Fill, Maximum = 1000, Height = 22 };
     private readonly Label _lblTotal = new() { AutoSize = true };
@@ -87,7 +89,7 @@ internal sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = $"AdbSync {AppVersion} — copia incrementale Android → PC via ADB";
+        Text = L.F("AdbSync {0} — copia incrementale Android → PC via ADB", AppVersion);
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(S(1180), S(820));
         MinimumSize = new Size(S(900), S(640));
@@ -97,7 +99,9 @@ internal sealed class MainForm : Form
         WireEvents();
 
         _log.EntryWritten += e => _pendingLog.Enqueue(e);
-        _log.Info($"AdbSync {AppVersion} — dati in {(AppPaths.IsPortable ? "cartella del programma (portable)" : "AppData (cartella del programma non scrivibile)")}: {Path.GetDirectoryName(AppPaths.DataDirectory)}");
+        _log.Info(L.F("AdbSync {0} — dati in {1}: {2}", AppVersion,
+            AppPaths.IsPortable ? L.T("cartella del programma (portable)") : L.T("AppData (cartella del programma non scrivibile)"),
+            Path.GetDirectoryName(AppPaths.DataDirectory)));
         foreach (var m in _migration) _log.Info(m);
         if (L.Code != L.DefaultCode) _log.Info($"Language: {L.Name} ({L.Code})");
         foreach (var m in _langMessages) _log.Warn(m);
@@ -122,16 +126,16 @@ internal sealed class MainForm : Form
         paths.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         paths.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         paths.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        paths.Controls.Add(MakeLabel("Telefono:"), 0, 0);
+        paths.Controls.Add(MakeLabel(L.T("Telefono:")), 0, 0);
         paths.Controls.Add(_cmbDevice, 1, 0);
         paths.Controls.Add(_btnRefresh, 2, 0);
-        paths.Controls.Add(MakeLabel("Cartella sul telefono:"), 0, 1);
+        paths.Controls.Add(MakeLabel(L.T("Cartella sul telefono:")), 0, 1);
         paths.Controls.Add(_txtRemote, 1, 1);
         paths.Controls.Add(_btnBrowseRemote, 2, 1);
-        paths.Controls.Add(MakeLabel("Cartella sul PC:"), 0, 2);
+        paths.Controls.Add(MakeLabel(L.T("Cartella sul PC:")), 0, 2);
         paths.Controls.Add(_txtLocal, 1, 2);
         paths.Controls.Add(_btnBrowseLocal, 2, 2);
-        var grpPaths = new GroupBox { Text = "Origine (telefono)  →  Destinazione (PC)   ·   modalità: Aggiorna (copia nuovi e modificati, non cancella mai nulla)", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8) };
+        var grpPaths = new GroupBox { Text = L.T("Origine (telefono)  →  Destinazione (PC)   ·   modalità: Aggiorna (copia nuovi e modificati, non cancella mai nulla)"), Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8) };
         grpPaths.Controls.Add(paths);
         root.Controls.Add(grpPaths, 0, 0);
 
@@ -146,23 +150,24 @@ internal sealed class MainForm : Form
         row1.Controls.Add(_chkOverwrite);
         row1.Controls.Add(_chkVerify);
         var row2 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        row2.Controls.Add(MakeLabel("Trasferimenti paralleli:"));
+        row2.Controls.Add(MakeLabel(L.T("Trasferimenti paralleli:")));
         row2.Controls.Add(_numParallel);
-        row2.Controls.Add(MakeLabel("Timeout stallo (s):"));
+        row2.Controls.Add(MakeLabel(L.T("Timeout stallo (s):")));
         row2.Controls.Add(_numStall);
-        row2.Controls.Add(MakeLabel("Tentativi extra:"));
+        row2.Controls.Add(MakeLabel(L.T("Tentativi extra:")));
         row2.Controls.Add(_numRetries);
         row2.Controls.Add(_btnExcludes);
         row2.Controls.Add(_chkDiagnostic);
         _chkDiagnostic.Margin = new Padding(12, 6, 3, 3);
         var row3 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        row3.Controls.Add(MakeLabel("File con stessa dimensione ma data diversa:"));
+        row3.Controls.Add(MakeLabel(L.T("File con stessa dimensione ma data diversa:")));
         _cmbAlign.Items.AddRange(new object[]
         {
-            "non toccare",
-            "allinea le date (solo nome e dimensione)",
-            "verifica rapida (primi e ultimi 64 KB) e allinea le date",
-            "verifica MD5 completa e allinea le date",
+            // l'ordine corrisponde ai valori di DateAlignMode (indice = valore)
+            L.T("non toccare"),
+            L.T("allinea le date (solo nome e dimensione)"),
+            L.T("verifica rapida (primi e ultimi 64 KB) e allinea le date"),
+            L.T("verifica MD5 completa e allinea le date"),
         });
         _cmbAlign.Width = S(380);
         row3.Controls.Add(_cmbAlign);
@@ -173,18 +178,18 @@ internal sealed class MainForm : Form
         opts.Controls.Add(row1, 0, 0);
         opts.Controls.Add(row2, 0, 1);
         opts.Controls.Add(row3, 0, 2);
-        var grpOpts = new GroupBox { Text = "Opzioni", Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8, 4, 8, 4) };
+        var grpOpts = new GroupBox { Text = L.T("Opzioni"), Dock = DockStyle.Fill, AutoSize = true, Padding = new Padding(8, 4, 8, 4) };
         grpOpts.Controls.Add(opts);
         root.Controls.Add(grpOpts, 0, 1);
 
         var tip = new ToolTip { AutoPopDelay = 20000 };
-        tip.SetToolTip(_chkSizeOnly, "Utile se i file sul PC sono stati copiati in passato (es. via MTP) senza conservare la data originale.");
-        tip.SetToolTip(_chkDst, "Su dischi FAT/exFAT le date possono risultare spostate di un'ora con il cambio di ora legale.");
-        tip.SetToolTip(_chkOverwrite, "Conflitto = il file sul PC è più recente e diverso. Normalmente non viene toccato.");
-        tip.SetToolTip(_chkVerify, "Calcola l'MD5 sul telefono e sul PC per ogni file copiato. Garantisce l'integrità ma rallenta.");
-        tip.SetToolTip(_numStall, "Se per questi secondi non arriva alcun byte il file è considerato bloccato: viene rimesso in fondo alla coda (senza attese) e ritentato dopo gli altri.\nValori molto bassi (1-3 s) aiutano con molti file bloccati, ma un file grande con pause normali potrebbe ripartire più volte.");
-        tip.SetToolTip(_cmbAlign, "Per i file presenti su entrambi con stesso nome e dimensione ma data diversa (es. copiati in passato via MTP).\nRapida: esatta per file fino a 128 KB; per quelli più grandi controlla inizio e fine.\nMD5: legge tutto il file su telefono e PC.");
-        tip.SetToolTip(_chkDiagnostic, "A ogni confronto salva in logs\\diagnostica_<data> l'elenco completo dei file del telefono, del PC e del piano con il motivo di ogni decisione.");
+        tip.SetToolTip(_chkSizeOnly, L.T("Utile se i file sul PC sono stati copiati in passato (es. via MTP) senza conservare la data originale."));
+        tip.SetToolTip(_chkDst, L.T("Su dischi FAT/exFAT le date possono risultare spostate di un'ora con il cambio di ora legale."));
+        tip.SetToolTip(_chkOverwrite, L.T("Conflitto = il file sul PC è più recente e diverso. Normalmente non viene toccato."));
+        tip.SetToolTip(_chkVerify, L.T("Calcola l'MD5 sul telefono e sul PC per ogni file copiato. Garantisce l'integrità ma rallenta."));
+        tip.SetToolTip(_numStall, L.T("Se per questi secondi non arriva alcun byte il file è considerato bloccato: viene rimesso in fondo alla coda (senza attese) e ritentato dopo gli altri.\nValori molto bassi (1-3 s) aiutano con molti file bloccati, ma un file grande con pause normali potrebbe ripartire più volte."));
+        tip.SetToolTip(_cmbAlign, L.T("Per i file presenti su entrambi con stesso nome e dimensione ma data diversa (es. copiati in passato via MTP).\nRapida: esatta per file fino a 128 KB; per quelli più grandi controlla inizio e fine.\nMD5: legge tutto il file su telefono e PC."));
+        tip.SetToolTip(_chkDiagnostic, L.T("A ogni confronto salva in logs\\diagnostica_<data> l'elenco completo dei file del telefono, del PC e del piano con il motivo di ogni decisione."));
 
         // --- pulsanti ---
         var actions = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 7 };
@@ -206,16 +211,18 @@ internal sealed class MainForm : Form
         root.Controls.Add(actions, 0, 2);
 
         // --- scheda File ---
-        AddColumns(_lvFiles, ("Esito", 110), ("Categoria", 120), ("Percorso", 420), ("Dim. telefono", 95), ("Data telefono", 135), ("Dim. PC", 95), ("Data PC", 135), ("Note", 300));
+        AddColumns(_lvFiles, (L.T("Esito"), 110), (L.T("Categoria"), 120), (L.T("Percorso"), 420), (L.T("Dim. telefono"), 95), (L.T("Data telefono"), 135),
+            (L.T("Dim. PC"), 95), (L.T("Data PC"), 135), (L.T("Note"), 300));
         foreach (var (cat, label, on) in new[]
                  {
-                     (ItemCategory.New, "Nuovi", true), (ItemCategory.Changed, "Modificati", true), (ItemCategory.Conflict, "Conflitti", true),
-                     (ItemCategory.DateOnly, "Solo data diversa", true), (ItemCategory.Collision, "Collisioni", true),
-                     (ItemCategory.Blocked, "Non copiabili", true),
-                     (ItemCategory.Identical, "Identici", false), (ItemCategory.OnlyOnPc, "Solo sul PC", false),
-                     (ItemCategory.Excluded, "Esclusi", false),
+                     (ItemCategory.New, L.T("Nuovi"), true), (ItemCategory.Changed, L.T("Modificati"), true), (ItemCategory.Conflict, L.T("Conflitti"), true),
+                     (ItemCategory.DateOnly, L.T("Solo data diversa"), true), (ItemCategory.Collision, L.T("Collisioni"), true),
+                     (ItemCategory.Blocked, L.T("Non copiabili"), true),
+                     (ItemCategory.Identical, L.T("Identici"), false), (ItemCategory.OnlyOnPc, L.T("Solo sul PC"), false),
+                     (ItemCategory.Excluded, L.T("Esclusi"), false),
                  })
         {
+            // Tag = etichetta già tradotta, usata da UpdateFilterCounts per "Nuovi (15)"
             var cb = new CheckBox { Text = label, Checked = on, AutoSize = true, Tag = label, ForeColor = CategoryColor(cat) };
             cb.CheckedChanged += (_, _) => RefreshView();
             _filterChecks[cat] = cb;
@@ -229,14 +236,14 @@ internal sealed class MainForm : Form
         filesPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         filesPanel.Controls.Add(_filters, 0, 0);
         filesPanel.Controls.Add(_lvFiles, 0, 1);
-        var tabFiles = new TabPage("File") { Padding = new Padding(4) };
+        var tabFiles = new TabPage(L.T("File")) { Padding = new Padding(4) };
         tabFiles.Controls.Add(filesPanel);
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Copia anche questi file", null, (_, _) => SetActionOnSelection(ItemAction.Copy));
-        menu.Items.Add("Non copiare questi file", null, (_, _) => SetActionOnSelection(ItemAction.Skip));
+        menu.Items.Add(L.T("Copia anche questi file"), null, (_, _) => SetActionOnSelection(ItemAction.Copy));
+        menu.Items.Add(L.T("Non copiare questi file"), null, (_, _) => SetActionOnSelection(ItemAction.Skip));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Apri cartella sul PC", null, (_, _) => OpenSelectedInExplorer());
+        menu.Items.Add(L.T("Apri cartella sul PC"), null, (_, _) => OpenSelectedInExplorer());
         _lvFiles.ContextMenuStrip = menu;
 
         // --- scheda Log ---
@@ -244,7 +251,7 @@ internal sealed class MainForm : Form
         logPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         logPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var logBar = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
-        var btnOpenLogs = new Button { Text = "Apri cartella log e report", AutoSize = true };
+        var btnOpenLogs = new Button { Text = L.T("Apri cartella log e report"), AutoSize = true };
         btnOpenLogs.Click += (_, _) => OpenFolder(SyncLogger.DefaultLogDirectory);
         logBar.Controls.Add(_chkDetailedLog);
         logBar.Controls.Add(btnOpenLogs);
@@ -254,7 +261,7 @@ internal sealed class MainForm : Form
         tabLog.Controls.Add(logPanel);
 
         // --- scheda Errori ---
-        AddColumns(_lvErrors, ("Percorso", 480), ("Tentativi", 70), ("Errore", 520));
+        AddColumns(_lvErrors, (L.T("Percorso"), 480), (L.T("Tentativi"), 70), (L.T("Errore"), 520));
         _tabErrors.Padding = new Padding(4);
         _tabErrors.Controls.Add(_lvErrors);
 
@@ -278,9 +285,9 @@ internal sealed class MainForm : Form
         status.Controls.Add(_pbTotal, 0, 1);
         status.Controls.Add(_lblTotal, 0, 2);
         status.Controls.Add(_lblCounts, 0, 3);
-        AddColumns(_lvActive, ("#", 30), ("File in trasferimento", 560), ("Avanzamento", 230), ("Velocità", 100), ("Tentativo", 80));
+        AddColumns(_lvActive, ("#", 30), (L.T("File in trasferimento"), 560), (L.T("Avanzamento"), 230), (L.T("Velocità"), 100), (L.T("Tentativo"), 80));
         status.Controls.Add(_lvActive, 0, 4);
-        var grpStatus = new GroupBox { Text = "Stato   (trascina la linea sopra per ridimensionare)", Dock = DockStyle.Fill, Padding = new Padding(8, 4, 8, 4) };
+        var grpStatus = new GroupBox { Text = L.T("Stato   (trascina la linea sopra per ridimensionare)"), Dock = DockStyle.Fill, Padding = new Padding(8, 4, 8, 4) };
         grpStatus.Controls.Add(status);
         _split.Panel2.Controls.Add(grpStatus);
 
@@ -357,7 +364,7 @@ internal sealed class MainForm : Form
         {
             _cts?.Cancel();
             _btnCancel.Enabled = false;
-            _lblStatusMsg.Text = "Annullamento in corso: chiusura pulita dei trasferimenti...";
+            ShowStatusMsg(L.T("Annullamento in corso: chiusura pulita dei trasferimenti..."), cancelling: true);
         };
         _btnAdb.Click += (_, _) => ShowAdbMenu();
 
@@ -393,13 +400,13 @@ internal sealed class MainForm : Form
         string? adb = AdbEnvironment.Locate(_settings.AdbPath);
         if (adb is null)
         {
-            _lblAdb.Text = "adb non trovato";
+            _lblAdb.Text = L.T("adb non trovato");
             if (!interactive) return;
             var r = MessageBox.Show(this,
-                "Per comunicare con il telefono serve adb (Android platform-tools di Google).\n\n" +
-                "Scaricarlo ora automaticamente dal sito ufficiale Google (circa 7 MB)?\n\n" +
-                "Sì = scarica  ·  No = indica tu il percorso di adb.exe",
-                "adb non trovato", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                L.T("Per comunicare con il telefono serve adb (Android platform-tools di Google).\n\n" +
+                    "Scaricarlo ora automaticamente dal sito ufficiale Google (circa 7 MB)?\n\n" +
+                    "Sì = scarica  ·  No = indica tu il percorso di adb.exe"),
+                L.T("adb non trovato"), MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
             if (r == DialogResult.Yes) adb = await DownloadAdbAsync();
             else if (r == DialogResult.No) adb = PickAdbExe();
             if (adb is null) return;
@@ -407,18 +414,18 @@ internal sealed class MainForm : Form
 
         try
         {
-            SetBusy(true, "Avvio di adb...");
+            SetBusy(true, L.T("Avvio di adb..."));
             _env = await Task.Run(() => AdbEnvironment.StartAsync(adb, CancellationToken.None));
             _settings.AdbPath = adb;
             _lblAdb.Text = "adb: " + adb;
-            _log.Info("adb in uso: " + adb);
+            _log.Info(L.F("adb in uso: {0}", adb));
         }
         catch (Exception ex)
         {
             _env = null;
-            _lblAdb.Text = "adb non avviato";
+            _lblAdb.Text = L.T("adb non avviato");
             _log.Error(ex.Message);
-            if (interactive) MessageBox.Show(this, ex.Message, "Errore adb", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (interactive) MessageBox.Show(this, ex.Message, L.T("Errore adb"), MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -431,13 +438,13 @@ internal sealed class MainForm : Form
     {
         try
         {
-            SetBusy(true, "Download platform-tools da Google...");
+            SetBusy(true, L.T("Download platform-tools da Google..."));
             return await Task.Run(() => AdbEnvironment.DownloadPlatformToolsAsync(new InlineProgress<string>(m => _log.Info(m)), CancellationToken.None));
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, "Download non riuscito: " + ex.Message +
-                "\n\nPuoi scaricare manualmente le platform-tools da https://developer.android.com/tools/releases/platform-tools e indicare adb.exe.",
+            MessageBox.Show(this, L.F("Download non riuscito: {0}" +
+                "\n\nPuoi scaricare manualmente le platform-tools da https://developer.android.com/tools/releases/platform-tools e indicare adb.exe.", ex.Message),
                 "adb", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return null;
         }
@@ -449,34 +456,34 @@ internal sealed class MainForm : Form
 
     private string? PickAdbExe()
     {
-        using var dlg = new OpenFileDialog { Title = "Seleziona adb.exe", Filter = "adb.exe|adb.exe|Eseguibili|*.exe", CheckFileExists = true };
+        using var dlg = new OpenFileDialog { Title = L.T("Seleziona adb.exe"), Filter = L.T("adb.exe|adb.exe|Eseguibili|*.exe"), CheckFileExists = true };
         return dlg.ShowDialog(this) == DialogResult.OK ? dlg.FileName : null;
     }
 
     private void ShowAdbMenu()
     {
         var m = new ContextMenuStrip();
-        m.Items.Add("Scarica / aggiorna platform-tools ufficiali Google", null, async (_, _) =>
+        m.Items.Add(L.T("Scarica / aggiorna platform-tools ufficiali Google"), null, async (_, _) =>
         {
             var p = await DownloadAdbAsync();
             if (p is not null) { _settings.AdbPath = p; await InitAdbAsync(false); }
         });
-        m.Items.Add("Scegli adb.exe...", null, async (_, _) =>
+        m.Items.Add(L.T("Scegli adb.exe..."), null, async (_, _) =>
         {
             var p = PickAdbExe();
             if (p is not null) { _settings.AdbPath = p; await InitAdbAsync(true); }
         });
-        m.Items.Add("Riavvia collegamento adb", null, async (_, _) => await InitAdbAsync(true));
-        m.Items.Add("Arresta il server adb (libera la cartella del programma)", null, (_, _) =>
+        m.Items.Add(L.T("Riavvia collegamento adb"), null, async (_, _) => await InitAdbAsync(true));
+        m.Items.Add(L.T("Arresta il server adb (libera la cartella del programma)"), null, (_, _) =>
         {
             if (_busy) return;
             if (_env is not null) AdbEnvironment.KillServer(_env.AdbPath);
             _env = null;
-            _lblAdb.Text = "adb arrestato — premi Aggiorna per riavviarlo";
-            _log.Info("Server adb arrestato.");
+            _lblAdb.Text = L.T("adb arrestato — premi Aggiorna per riavviarlo");
+            _log.Info(L.T("Server adb arrestato."));
         });
         m.Items.Add(new ToolStripSeparator());
-        m.Items.Add("Apri cartella log e report", null, (_, _) => OpenFolder(SyncLogger.DefaultLogDirectory));
+        m.Items.Add(L.T("Apri cartella log e report"), null, (_, _) => OpenFolder(SyncLogger.DefaultLogDirectory));
         m.Show(_btnAdb, new Point(0, _btnAdb.Height));
     }
 
@@ -491,7 +498,7 @@ internal sealed class MainForm : Form
             foreach (var d in devices) _cmbDevice.Items.Add(d);
             if (devices.Count == 0)
             {
-                _cmbDevice.Items.Add("Nessun telefono: collega il cavo, attiva 'Debug USB' e premi Aggiorna");
+                _cmbDevice.Items.Add(L.T("Nessun telefono: collega il cavo, attiva 'Debug USB' e premi Aggiorna"));
                 _cmbDevice.SelectedIndex = 0;
                 return;
             }
@@ -501,7 +508,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            _log.Error("Elenco dispositivi non disponibile: " + ex.Message);
+            _log.Error(L.F("Elenco dispositivi non disponibile: {0}", ex.Message));
         }
     }
 
@@ -509,17 +516,17 @@ internal sealed class MainForm : Form
     {
         if (_env is null)
         {
-            if (showErrors) MessageBox.Show(this, "adb non è attivo. Usa il pulsante 'adb...'.", "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (showErrors) MessageBox.Show(this, L.T("adb non è attivo. Usa il pulsante 'adb...'."), "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return null;
         }
         if (_cmbDevice.SelectedItem is not DeviceInfo d)
         {
-            if (showErrors) MessageBox.Show(this, "Nessun telefono selezionato.\n\nCollega il telefono, attiva 'Debug USB' nelle Opzioni sviluppatore, conferma l'autorizzazione sul telefono e premi Aggiorna.", "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (showErrors) MessageBox.Show(this, L.T("Nessun telefono selezionato.\n\nCollega il telefono, attiva 'Debug USB' nelle Opzioni sviluppatore, conferma l'autorizzazione sul telefono e premi Aggiorna."), "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return null;
         }
         if (!d.IsOnline)
         {
-            if (showErrors) MessageBox.Show(this, $"{d.Model}: {d.StateLabel}.\n\nDopo aver risolto premi Aggiorna.", "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (showErrors) MessageBox.Show(this, L.F("{0}: {1}.\n\nDopo aver risolto premi Aggiorna.", d.Model, d.StateLabel), "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return null;
         }
         return _env.OpenDevice(d.Serial, d.ToString());
@@ -535,7 +542,7 @@ internal sealed class MainForm : Form
 
     private void BrowseLocal()
     {
-        using var dlg = new FolderBrowserDialog { Description = "Cartella di destinazione sul PC", UseDescriptionForTitle = true, ShowNewFolderButton = true };
+        using var dlg = new FolderBrowserDialog { Description = L.T("Cartella di destinazione sul PC"), UseDescriptionForTitle = true, ShowNewFolderButton = true };
         if (Directory.Exists(_txtLocal.Text)) dlg.InitialDirectory = _txtLocal.Text;
         if (dlg.ShowDialog(this) == DialogResult.OK) _txtLocal.Text = dlg.SelectedPath;
     }
@@ -554,8 +561,8 @@ internal sealed class MainForm : Form
         if (dev is null) return;
         string remote = _txtRemote.Text.Trim();
         string local = _txtLocal.Text.Trim();
-        if (remote.Length == 0) { MessageBox.Show(this, "Indica la cartella sul telefono.", "AdbSync"); return; }
-        if (local.Length == 0 || !Path.IsPathFullyQualified(local)) { MessageBox.Show(this, "Indica una cartella valida sul PC (percorso completo, es. D:\\Backup\\Telefono).", "AdbSync"); return; }
+        if (remote.Length == 0) { MessageBox.Show(this, L.T("Indica la cartella sul telefono."), "AdbSync"); return; }
+        if (local.Length == 0 || !Path.IsPathFullyQualified(local)) { MessageBox.Show(this, L.T("Indica una cartella valida sul PC (percorso completo, es. D:\\Backup\\Telefono)."), "AdbSync"); return; }
 
         var options = CurrentOptions();
         _cts = new CancellationTokenSource();
@@ -563,7 +570,7 @@ internal sealed class MainForm : Form
         _view = new List<SyncItem>();
         _lvFiles.VirtualListSize = 0;
         ResetStatusPanel();
-        SetBusy(true, "Scansione in corso...");
+        SetBusy(true, L.T("Scansione in corso..."));
         _pbTotal.Style = ProgressBarStyle.Marquee;
         _tabs.SelectedIndex = 0;
         var sw = Stopwatch.StartNew();
@@ -580,31 +587,31 @@ internal sealed class MainForm : Form
             _plan = plan;
             UpdateFilterCounts();
             RefreshView();
-            _lblPhase.Text = $"Confronto completato in {Format.Duration(sw.Elapsed)}: {plan.WorkSummary}.";
+            _lblPhase.Text = L.F("Confronto completato in {0}: {1}.", Format.Duration(sw.Elapsed), plan.WorkSummary);
             _lblTotal.Text = CountsText(plan);
             if (plan.NotCopiable > 0)
             {
-                _lblStatusMsg.Text = $"Attenzione: {Format.Number(plan.NotCopiable)} elementi del telefono NON copiabili (permesso negato / collisioni): vedi scheda Errori.";
+                ShowStatusMsg(L.F("Attenzione: {0} elementi del telefono NON copiabili (permesso negato / collisioni): vedi scheda Errori.", Format.Number(plan.NotCopiable)));
                 FillErrors(plan);
             }
             int excludedAll = plan.ExcludedCount + plan.ExcludedLocalCount;
             if (excludedAll > 0 && plan.NotCopiable == 0)
-                _lblStatusMsg.Text = $"{Format.Number(excludedAll)} file esclusi dalle regole (es. miniature .thumbnails): non confrontati. Per vederli spunta il filtro \"Esclusi\"; per includerli usa Esclusioni….";
+                ShowStatusMsg(L.F("{0} file esclusi dalle regole (es. miniature .thumbnails): non confrontati. Per vederli spunta il filtro \"Esclusi\"; per includerli usa Esclusioni….", Format.Number(excludedAll)));
             int dateOnly = plan.Count(ItemCategory.DateOnly);
             if (dateOnly > 50 && !options.CompareMode.Equals(CompareMode.SizeOnly))
-                _log.Warn($"{dateOnly} file hanno stessa dimensione ma data diversa (PC più recente): probabilmente copiati in passato senza conservare la data. Non vengono ricopiati.");
+                _log.Warn(L.F("{0} file hanno stessa dimensione ma data diversa (PC più recente): probabilmente copiati in passato senza conservare la data. Non vengono ricopiati.", dateOnly));
         }
         catch (OperationCanceledException)
         {
-            _lblPhase.Text = "Confronto annullato.";
+            _lblPhase.Text = L.T("Confronto annullato.");
             _session = null;
         }
         catch (Exception ex)
         {
-            _lblPhase.Text = ex is IncompleteScanException ? "✖ Scansione del telefono incompleta: confronto fermato." : "✖ Confronto non riuscito.";
+            _lblPhase.Text = ex is IncompleteScanException ? L.T("✖ Scansione del telefono incompleta: confronto fermato.") : L.T("✖ Confronto non riuscito.");
             _lblPhase.ForeColor = Color.Firebrick;
             _log.Error(ex.Message);
-            MessageBox.Show(this, ex.Message, "Confronto non riuscito", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(this, ex.Message, L.T("Confronto non riuscito"), MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -620,18 +627,18 @@ internal sealed class MainForm : Form
     {
         if (_plan is null) { await CompareAsync(); if (_plan is null) return; }
         var plan = _plan;
-        if (!plan.HasWork) { MessageBox.Show(this, "Niente da fare: la cartella sul PC è già allineata.", "AdbSync"); return; }
+        if (!plan.HasWork) { MessageBox.Show(this, L.T("Niente da fare: la cartella sul PC è già allineata."), "AdbSync"); return; }
         var dev = GetSelectedDevice(true);
         if (dev is null) return;
 
         var age = DateTime.Now - plan.ScannedAt;
         string ageNote = age.TotalMinutes > 60
-            ? $"\n\nL'elenco è stato acquisito {Format.Duration(age)} fa. Prima di scrivere, ogni file sul PC viene comunque ricontrollato; " +
-              "se nel frattempo sono cambiati file sul telefono, conviene rifare ① Confronta."
+            ? "\n\n" + L.F("L'elenco è stato acquisito {0} fa. Prima di scrivere, ogni file sul PC viene comunque ricontrollato; " +
+              "se nel frattempo sono cambiati file sul telefono, conviene rifare ① Confronta.", Format.Duration(age))
             : "";
         if (confirm && MessageBox.Show(this,
-                $"Da fare: {plan.WorkSummary}.\n\nda  {dev.DisplayName}:{plan.RemoteRoot}\na   {plan.LocalRoot}\n\nNessun file verrà cancellato.{ageNote}",
-                "Conferma sincronizzazione", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
+                L.F("Da fare: {0}.\n\nda  {1}:{2}\na   {3}\n\nNessun file verrà cancellato.", plan.WorkSummary, dev.DisplayName, plan.RemoteRoot, plan.LocalRoot) + ageNote,
+                L.T("Conferma sincronizzazione"), MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
             return;
 
         var options = CurrentOptions();
@@ -640,7 +647,7 @@ internal sealed class MainForm : Form
         ResetStatusPanel();
         var engine = _engine = new SyncEngine(dev, options, _log);
         var token = _cts.Token;
-        SetBusy(true, "Copia in corso...");
+        SetBusy(true, L.T("Copia in corso..."));
         KeepAwake(true);
         SyncResult? result = null;
         try
@@ -649,8 +656,8 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            _log.Error("Errore imprevisto: " + ex);
-            MessageBox.Show(this, ex.Message, "Errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _log.Error(L.F("Errore imprevisto: {0}", ex));
+            MessageBox.Show(this, ex.Message, L.T("Errore"), MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -681,8 +688,8 @@ internal sealed class MainForm : Form
             _btnSync.Enabled = next.HasWork;
         }
 
-        string report = (result.ReportPath is not null ? "\n\nReport: " + result.ReportPath : "") +
-                        (result.RenamedLogPath is not null ? $"\nNomi convertiti per Windows ({Format.Number(result.RenamedCount)}): " + result.RenamedLogPath : "");
+        string report = (result.ReportPath is not null ? "\n\n" + L.F("Report: {0}", result.ReportPath) : "") +
+                        (result.RenamedLogPath is not null ? "\n" + L.F("Nomi convertiti per Windows ({0}): {1}", Format.Number(result.RenamedCount), result.RenamedLogPath) : "");
         int toRetry = _plan?.CountToCopy ?? 0;
         int dateOnly = _plan?.Count(ItemCategory.DateOnly) ?? 0;
         if (_session is null || (toRetry == 0 && dateOnly == 0))
@@ -700,7 +707,7 @@ internal sealed class MainForm : Form
             var session = _session;
             var opts = CurrentOptions();
             opts.AlignSameSizeDates = mode;
-            SetBusy(true, "Preparazione dell'allineamento date dall'elenco acquisito...");
+            SetBusy(true, L.T("Preparazione dell'allineamento date dall'elenco acquisito..."));
             try
             {
                 _plan = await Task.Run(() => SyncEngine.PlanFromSession(session, opts, _log, writeDiagnostics: false));
@@ -763,10 +770,10 @@ internal sealed class MainForm : Form
     }
 
     private static string CountsText(SyncPlan p) =>
-        $"Elenco: telefono {Format.Number(p.RemoteFileCount)} file e {Format.Number(p.RemoteDirCount)} cartelle  ·  " +
-        $"PC {Format.Number(p.LocalFileCount)} file e {Format.Number(p.LocalDirCount)} cartelle  ·  " +
-        (p.ExcludedCount + p.ExcludedLocalCount > 0 ? $"esclusi {Format.Number(p.ExcludedCount + p.ExcludedLocalCount)}  ·  " : "") +
-        $"acquisito alle {p.ScannedAt:HH:mm}";
+        L.F("Elenco: telefono {0} file e {1} cartelle", Format.Number(p.RemoteFileCount), Format.Number(p.RemoteDirCount)) + "  ·  " +
+        L.F("PC {0} file e {1} cartelle", Format.Number(p.LocalFileCount), Format.Number(p.LocalDirCount)) + "  ·  " +
+        (p.ExcludedCount + p.ExcludedLocalCount > 0 ? L.F("esclusi {0}", Format.Number(p.ExcludedCount + p.ExcludedLocalCount)) + "  ·  " : "") +
+        L.F("acquisito alle {0:HH:mm}", p.ScannedAt);
 
     /// <summary>Opzione di confronto cambiata: si ricalcola il piano dall'elenco già acquisito, se valido.</summary>
     private async void OptionsChanged()
@@ -786,13 +793,13 @@ internal sealed class MainForm : Form
         if (_session is null) return;
         var session = _session;
         var options = CurrentOptions();
-        SetBusy(true, "Ricalcolo del piano dall'elenco acquisito (nessuna scansione)...");
+        SetBusy(true, L.T("Ricalcolo del piano dall'elenco acquisito (nessuna scansione)..."));
         try
         {
             _plan = WithManualActions(await Task.Run(() => SyncEngine.PlanFromSession(session, options, _log, writeDiagnostics: false)));
             UpdateFilterCounts();
             RefreshView();
-            _lblPhase.Text = $"Piano ricalcolato dall'elenco delle {session.ScannedAt:HH:mm}: {_plan.WorkSummary}.";
+            _lblPhase.Text = L.F("Piano ricalcolato dall'elenco delle {0:HH:mm}: {1}.", session.ScannedAt, _plan.WorkSummary);
         }
         finally
         {
@@ -806,16 +813,16 @@ internal sealed class MainForm : Form
         _lvErrors.Items.Clear();
         foreach (var d in plan.Directories.Where(d => d.Error is not null))
         {
-            var li = new ListViewItem("[cartella] " + (d.IsRoot ? plan.LocalRoot : d.LocalRelativePath)) { ForeColor = Color.Firebrick };
+            var li = new ListViewItem(L.F("[cartella] {0}", d.IsRoot ? plan.LocalRoot : d.LocalRelativePath)) { ForeColor = Color.Firebrick };
             li.SubItems.Add("");
             li.SubItems.Add(d.Error);
             _lvErrors.Items.Add(li);
         }
         foreach (var p in plan.PermissionDenied)
         {
-            var li = new ListViewItem("[telefono] " + p) { ForeColor = Color.Firebrick };
+            var li = new ListViewItem(L.F("[telefono] {0}", p)) { ForeColor = Color.Firebrick };
             li.SubItems.Add("");
-            li.SubItems.Add("Android non permette di leggerlo: non copiato");
+            li.SubItems.Add(L.T("Android non permette di leggerlo: non copiato"));
             _lvErrors.Items.Add(li);
         }
         foreach (var i in plan.Items.Where(i => i.Status is ItemStatus.Failed or ItemStatus.NotProcessed or ItemStatus.ContentDiffers || i.Category is ItemCategory.Collision or ItemCategory.Blocked))
@@ -825,11 +832,11 @@ internal sealed class MainForm : Form
                 ForeColor = i.Status == ItemStatus.Failed ? Color.Firebrick : i.Status == ItemStatus.ContentDiffers ? Color.DarkOrange : SystemColors.GrayText,
             };
             li.SubItems.Add(i.Attempts.ToString());
-            li.SubItems.Add(i.Error ?? (i.Status == ItemStatus.NotProcessed ? "Non elaborato" : ""));
+            li.SubItems.Add(i.Error ?? (i.Status == ItemStatus.NotProcessed ? L.T("Non elaborato") : ""));
             _lvErrors.Items.Add(li);
         }
         _lvErrors.EndUpdate();
-        _tabErrors.Text = _lvErrors.Items.Count > 0 ? $"Errori ({_lvErrors.Items.Count})" : "Errori";
+        _tabErrors.Text = _lvErrors.Items.Count > 0 ? L.F("Errori ({0})", _lvErrors.Items.Count) : L.T("Errori");
     }
 
     private void InvalidatePlan(bool dropSession = false)
@@ -840,7 +847,7 @@ internal sealed class MainForm : Form
         _plan = null;
         _btnSync.Enabled = false;
         _lblPhase.ForeColor = SystemColors.ControlText;
-        _lblPhase.Text = "Impostazioni cambiate: premi ① Confronta.";
+        _lblPhase.Text = L.T("Impostazioni cambiate: premi ① Confronta.");
     }
 
     private void SetBusy(bool busy, string? phase)
@@ -856,13 +863,20 @@ internal sealed class MainForm : Form
             _lblPhase.ForeColor = SystemColors.ControlText;
             _lblPhase.Text = phase;
         }
-        if (busy) _lblStatusMsg.Text = "";
+        if (busy) ShowStatusMsg("");
         else
         {
-            if (_lblStatusMsg.Text.StartsWith("Annullamento", StringComparison.Ordinal)) _lblStatusMsg.Text = "";
+            if (_statusMsgIsCancel) ShowStatusMsg(""); // il messaggio di annullamento non serve più a operazione finita
             _lvActive.Items.Clear();
         }
         UseWaitCursor = false;
+    }
+
+    /// <summary>Mostra un messaggio di stato; <paramref name="cancelling"/> = è il messaggio di annullamento in corso.</summary>
+    private void ShowStatusMsg(string text, bool cancelling = false)
+    {
+        _lblStatusMsg.Text = text;
+        _statusMsgIsCancel = cancelling;
     }
 
     // =====================================================================  VISTA FILE
@@ -902,14 +916,14 @@ internal sealed class MainForm : Form
         var li = new ListViewItem(StatusText(i)) { UseItemStyleForSubItems = true, ForeColor = CategoryColor(i.Category) };
         if (i.Status == ItemStatus.Failed) li.ForeColor = Color.Firebrick;
         else if (i.Status == ItemStatus.Done) li.ForeColor = Color.DarkGreen;
-        li.SubItems.Add(CategoryText(i.Category) + (i.Category == ItemCategory.Excluded && i.Remote is null ? " (solo PC)" : ""));
+        li.SubItems.Add(CategoryText(i.Category) + (i.Category == ItemCategory.Excluded && i.Remote is null ? " " + L.T("(solo PC)") : ""));
         li.SubItems.Add(i.RelativePath);
         li.SubItems.Add(i.Remote is null ? "" : Format.Bytes(i.Remote.Size));
         li.SubItems.Add(Format.UnixTime(i.Remote?.MtimeUnix));
         li.SubItems.Add(i.Local is null ? "" : Format.Bytes(i.Local.Size));
         li.SubItems.Add(Format.UnixTime(i.Local?.MtimeUnix));
-        string note = i.Error ?? (i.Category == ItemCategory.Excluded ? "Escluso dalla regola: " + i.ExcludedBy
-            : i.NameWasSanitized ? "Salvato come: " + i.LocalRelativePath : "");
+        string note = i.Error ?? (i.Category == ItemCategory.Excluded ? L.F("Escluso dalla regola: {0}", i.ExcludedBy)
+            : i.NameWasSanitized ? L.F("Salvato come: {0}", i.LocalRelativePath) : "");
         li.SubItems.Add(note);
         return li;
     }
@@ -917,46 +931,46 @@ internal sealed class MainForm : Form
     private static string StatusText(SyncItem i) => i.Action switch
     {
         ItemAction.Skip => i.Category is ItemCategory.Identical or ItemCategory.OnlyOnPc ? "—"
-            : i.Category == ItemCategory.Excluded ? "Escluso" : "Non copiare",
+            : i.Category == ItemCategory.Excluded ? L.T("Escluso") : L.T("Non copiare"),
         ItemAction.FixTimes => i.Status switch
         {
-            ItemStatus.Done => "✔ Date allineate",
-            ItemStatus.Failed => "✖ Date",
-            _ => "Allinea date",
+            ItemStatus.Done => L.T("✔ Date allineate"),
+            ItemStatus.Failed => L.T("✖ Date"),
+            _ => L.T("Allinea date"),
         },
         ItemAction.VerifyAndFixTimes => i.Status switch
         {
-            ItemStatus.Done => "✔ Verificato, date allineate",
-            ItemStatus.ContentDiffers => "≠ Contenuto diverso",
-            ItemStatus.Failed => "✖ Verifica",
-            _ => "Verifica e allinea",
+            ItemStatus.Done => L.T("✔ Verificato, date allineate"),
+            ItemStatus.ContentDiffers => L.T("≠ Contenuto diverso"),
+            ItemStatus.Failed => L.T("✖ Verifica"),
+            _ => L.T("Verifica e allinea"),
         },
         _ => CopyStatusText(i),
     };
 
     private static string CopyStatusText(SyncItem i) => i.Status switch
         {
-            ItemStatus.Pending => "Da copiare",
-            ItemStatus.Copying => "Copia...",
-            ItemStatus.Retrying => "Ritento...",
-            ItemStatus.Done => "✔ Copiato",
-            ItemStatus.Failed => "✖ Errore",
-            ItemStatus.NotProcessed => "Non elaborato",
-            ItemStatus.Requeued => "In coda (stallo)",
+            ItemStatus.Pending => L.T("Da copiare"),
+            ItemStatus.Copying => L.T("Copia..."),
+            ItemStatus.Retrying => L.T("Ritento..."),
+            ItemStatus.Done => L.T("✔ Copiato"),
+            ItemStatus.Failed => L.T("✖ Errore"),
+            ItemStatus.NotProcessed => L.T("Non elaborato"),
+            ItemStatus.Requeued => L.T("In coda (stallo)"),
             _ => "",
     };
 
     private static string CategoryText(ItemCategory c) => c switch
     {
-        ItemCategory.New => "Nuovo",
-        ItemCategory.Changed => "Modificato",
-        ItemCategory.Conflict => "Conflitto",
-        ItemCategory.DateOnly => "Solo data diversa",
-        ItemCategory.Identical => "Identico",
-        ItemCategory.OnlyOnPc => "Solo sul PC",
-        ItemCategory.Collision => "Collisione nome",
-        ItemCategory.Blocked => "Non copiabile",
-        ItemCategory.Excluded => "Escluso",
+        ItemCategory.New => L.T("Nuovo"),
+        ItemCategory.Changed => L.T("Modificato"),
+        ItemCategory.Conflict => L.T("Conflitto"),
+        ItemCategory.DateOnly => L.T("Solo data diversa"),
+        ItemCategory.Identical => L.T("Identico"),
+        ItemCategory.OnlyOnPc => L.T("Solo sul PC"),
+        ItemCategory.Collision => L.T("Collisione nome"),
+        ItemCategory.Blocked => L.T("Non copiabile"),
+        ItemCategory.Excluded => L.T("Escluso"),
         _ => c.ToString(),
     };
 
@@ -990,7 +1004,7 @@ internal sealed class MainForm : Form
         if (changed == 0) return;
         _lvFiles.Invalidate();
         _btnSync.Enabled = _plan.HasWork;
-        _lblPhase.Text = $"Da fare: {_plan.WorkSummary}.";
+        _lblPhase.Text = L.F("Da fare: {0}.", _plan.WorkSummary);
     }
 
     private void OpenSelectedInExplorer()
@@ -1061,11 +1075,11 @@ internal sealed class MainForm : Form
         _lblTotal.Text = "";
         _lblCounts.Text = "";
         _lblCounts.ForeColor = SystemColors.ControlText;
-        _lblStatusMsg.Text = "";
+        ShowStatusMsg("");
         _lblPhase.ForeColor = SystemColors.ControlText;
         _lvActive.Items.Clear();
         _lvErrors.Items.Clear();
-        _tabErrors.Text = "Errori";
+        _tabErrors.Text = L.T("Errori");
     }
 
     private void UiTick()
@@ -1074,7 +1088,7 @@ internal sealed class MainForm : Form
 
         if (_busy && _compareWatch.IsRunning)
         {
-            _lblPhase.Text = (_compareStatus ?? "Scansione in corso...") + $"   ·   {Format.Duration(_compareWatch.Elapsed)}";
+            _lblPhase.Text = (_compareStatus ?? L.T("Scansione in corso...")) + $"   ·   {Format.Duration(_compareWatch.Elapsed)}";
             return;
         }
 
@@ -1086,14 +1100,15 @@ internal sealed class MainForm : Form
         double frac = p.TotalBytes > 0 ? Math.Clamp((double)done / p.TotalBytes, 0, 1) : 0;
         _pbTotal.Value = (int)(frac * 1000);
         _lblPhase.Text = p.TotalBytes > 0 ? $"{p.Phase}: {frac * 100:0.0}%" : p.Phase;
-        _lblStatusMsg.Text = p.StatusMessage ?? (_cts?.IsCancellationRequested == true ? "Annullamento in corso..." : "");
+        bool cancelling = p.StatusMessage is null && _cts?.IsCancellationRequested == true;
+        ShowStatusMsg(p.StatusMessage ?? (cancelling ? L.T("Annullamento in corso...") : ""), cancelling);
         var elapsed = p.Elapsed;
-        _lblTotal.Text = $"{Format.Bytes(done)} di {Format.Bytes(p.TotalBytes)}   ·   {Format.Bytes((long)bps)}/s   ·   " +
-                         $"trascorso {Format.Duration(elapsed)}" +
-                         (p.FinishedAt is null ? $"   ·   tempo stimato rimanente {(eta is null ? "calcolo..." : Format.Duration(eta.Value))}" : "   ·   terminato");
-        _lblCounts.Text = $"File: {Format.Number(p.DoneFiles)} copiati su {Format.Number(p.TotalFiles)}   ·   " +
-                          (p.Stalls > 0 ? $"stalli: {p.Stalls} (in coda per nuovo tentativo: {p.RequeuedFiles})   ·   " : "") +
-                          $"errori definitivi: {p.FailedFiles}   ·   in attesa di nuovo tentativo: {p.RetryingFiles}";
+        _lblTotal.Text = L.F("{0} di {1}", Format.Bytes(done), Format.Bytes(p.TotalBytes)) + $"   ·   {Format.Bytes((long)bps)}/s   ·   " +
+                         L.F("trascorso {0}", Format.Duration(elapsed)) + "   ·   " +
+                         (p.FinishedAt is null ? L.F("tempo stimato rimanente {0}", eta is null ? L.T("calcolo...") : Format.Duration(eta.Value)) : L.T("terminato"));
+        _lblCounts.Text = L.F("File: {0} copiati su {1}", Format.Number(p.DoneFiles), Format.Number(p.TotalFiles)) + "   ·   " +
+                          (p.Stalls > 0 ? L.F("stalli: {0} (in coda per nuovo tentativo: {1})", p.Stalls, p.RequeuedFiles) + "   ·   " : "") +
+                          L.F("errori definitivi: {0}", p.FailedFiles) + "   ·   " + L.F("in attesa di nuovo tentativo: {0}", p.RetryingFiles);
         _lblCounts.ForeColor = p.FailedFiles > 0 ? Color.Firebrick : SystemColors.ControlText;
 
         _lvActive.BeginUpdate();
@@ -1147,7 +1162,7 @@ internal sealed class MainForm : Form
     {
         if (_busy && _cts is { IsCancellationRequested: false })
         {
-            if (MessageBox.Show(this, "Un'operazione è in corso. Interromperla e chiudere?\n\nI file già copiati restano integri; quelli in corso vengono scartati.",
+            if (MessageBox.Show(this, L.T("Un'operazione è in corso. Interromperla e chiudere?\n\nI file già copiati restano integri; quelli in corso vengono scartati."),
                     "AdbSync", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
             {
                 e.Cancel = true;

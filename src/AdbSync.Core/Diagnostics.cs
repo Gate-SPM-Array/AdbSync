@@ -71,12 +71,12 @@ public static class Diagnostics
                 foreach (var m in remote.RawMessages) w.WriteLine(m);
             }
 
-            log.Info("Diagnostica salvata in " + dir);
+            log.Info(L.F("Diagnostica salvata in {0}", dir));
             return dir;
         }
         catch (Exception ex)
         {
-            log.Warn("Impossibile scrivere i file di diagnostica: " + ex.Message);
+            log.Warn(L.F("Impossibile scrivere i file di diagnostica: {0}", ex.Message));
             return null;
         }
     }

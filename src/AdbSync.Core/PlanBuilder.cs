@@ -32,16 +32,16 @@ public static class PlanBuilder
                 {
                     RelativePath = r.RelativePath, LocalRelativePath = exRel, Remote = r, Local = exLocal,
                     Category = ItemCategory.Excluded, Action = ItemAction.Skip, NameWasSanitized = exSan, ExcludedBy = rule,
-                    Reason = options.Diagnostic ? "escluso dalla regola " + rule : "",
+                    Reason = options.Diagnostic ? L.F("escluso dalla regola {0}", rule) : "",
                 });
                 continue;
             }
 
             var (localRel, sanitized) = PathMapper.ToLocalRelative(r.RelativePath);
             string? blocked = r.RelativePath.EndsWith(LocalScanner.TempSuffix, StringComparison.OrdinalIgnoreCase)
-                ? $"il nome termina con \"{LocalScanner.TempSuffix}\", riservato ai file temporanei del programma"
+                ? L.F("il nome termina con \"{0}\", riservato ai file temporanei del programma", LocalScanner.TempSuffix)
                 : UnderReparse(localRel, local.ReparseDirectories) is { } rp
-                    ? $"sul PC la cartella \"{rp}\" è un collegamento (junction/symlink): non si scrive fuori dalla destinazione"
+                    ? L.F("sul PC la cartella \"{0}\" è un collegamento (junction/symlink): non si scrive fuori dalla destinazione", rp)
                     : null;
             if (blocked is not null)
             {
@@ -49,7 +49,7 @@ public static class PlanBuilder
                 {
                     RelativePath = r.RelativePath, LocalRelativePath = localRel, Remote = r,
                     Category = ItemCategory.Blocked, Action = ItemAction.Skip, NameWasSanitized = sanitized,
-                    Reason = "non copiabile: " + blocked, Error = "Non copiabile: " + blocked,
+                    Reason = L.F("non copiabile: {0}", blocked), Error = L.F("Non copiabile: {0}", blocked),
                 });
                 continue;
             }
@@ -63,8 +63,8 @@ public static class PlanBuilder
                     Category = ItemCategory.Collision,
                     Action = ItemAction.Skip,
                     NameWasSanitized = sanitized,
-                    Reason = "collisione di nomi su Windows",
-                    Error = $"Su Windows coincide con \"{first.RelativePath}\" (maiuscole/minuscole o caratteri non ammessi)",
+                    Reason = L.T("collisione di nomi su Windows"),
+                    Error = L.F("Su Windows coincide con \"{0}\" (maiuscole/minuscole o caratteri non ammessi)", first.RelativePath),
                 });
                 continue;
             }
@@ -90,10 +90,10 @@ public static class PlanBuilder
                 // già verificato in questa sessione: il contenuto è diverso → non si ritocca e non si riverifica
                 category = ItemCategory.Conflict;
                 action = options.OverwriteConflicts ? ItemAction.Copy : ItemAction.Skip;
-                reason = "stessa dimensione ma contenuto diverso (verificato): " + reason;
+                reason = L.F("stessa dimensione ma contenuto diverso (verificato): {0}", reason);
                 knownDiff = true;
             }
-            if (action == ItemAction.FixTimes && options.Diagnostic) reason += "; date da allineare a quelle del telefono";
+            if (action == ItemAction.FixTimes && options.Diagnostic) reason += L.T("; date da allineare a quelle del telefono");
             var item = new SyncItem
             {
                 RelativePath = r.RelativePath,
@@ -104,12 +104,13 @@ public static class PlanBuilder
                 NameWasSanitized = sanitized,
                 Action = action,
                 Reason = reason,
-                Error = knownDiff ? "Contenuto diverso dal telefono (verificato): date non modificate" : null,
+                Error = knownDiff ? L.T("Contenuto diverso dal telefono (verificato): date non modificate") : null,
             };
             claimed[localRel] = item;
             items.Add(item);
         }
 
+        string onlyOnPcReason = L.T("presente solo sul PC (mai cancellato)");
         foreach (var lf in local.Files.Values.OrderBy(f => f.RelativePath, StringComparer.Ordinal))
         {
             if (claimed.ContainsKey(lf.RelativePath) || excludedLocalPaths.Contains(lf.RelativePath)) continue;
@@ -120,7 +121,7 @@ public static class PlanBuilder
                 {
                     RelativePath = lf.RelativePath, LocalRelativePath = lf.RelativePath, Local = lf,
                     Category = ItemCategory.Excluded, Action = ItemAction.Skip, ExcludedBy = localRule,
-                    Reason = options.Diagnostic ? "solo sul PC, escluso dalla regola " + localRule : "",
+                    Reason = options.Diagnostic ? L.F("solo sul PC, escluso dalla regola {0}", localRule) : "",
                 });
                 continue;
             }
@@ -131,7 +132,7 @@ public static class PlanBuilder
                 Local = lf,
                 Category = ItemCategory.OnlyOnPc,
                 Action = ItemAction.Skip,
-                Reason = "presente solo sul PC (mai cancellato)",
+                Reason = onlyOnPcReason,
             });
         }
 
@@ -219,7 +220,7 @@ public static class PlanBuilder
 
     public static (ItemCategory Category, string Reason) ClassifyWithReason(RemoteFile r, LocalFile? lf, SyncOptions o, bool withReason = true)
     {
-        if (lf is null) return (ItemCategory.New, "presente solo sul telefono");
+        if (lf is null) return (ItemCategory.New, L.T("presente solo sul telefono"));
 
         long diff = lf.MtimeUnix - r.MtimeUnix; // > 0: PC più recente
         bool timeEqual = TimesEqual(lf.MtimeUnix, r.MtimeUnix, o);
@@ -231,13 +232,15 @@ public static class PlanBuilder
             if (!sizeEqual && timeEqual) return (ItemCategory.Changed, "");
             return (sizeEqual ? ItemCategory.DateOnly : ItemCategory.Conflict, "");
         }
-        string facts = $"dimensione telefono {r.Size} / PC {lf.Size}, data PC − telefono = {diff} s";
+        string facts = L.F("dimensione telefono {0} / PC {1}, data PC − telefono = {2} s", r.Size, lf.Size, diff);
 
         if (sizeEqual && (timeEqual || o.CompareMode == CompareMode.SizeOnly))
-            return (ItemCategory.Identical, $"identico ({facts}{(o.CompareMode == CompareMode.SizeOnly && !timeEqual ? ", confronto solo dimensione" : "")})");
-        if (!timeEqual && diff < 0) return (ItemCategory.Changed, $"telefono più recente ({facts})");
-        if (!sizeEqual && timeEqual) return (ItemCategory.Changed, $"stessa data ma dimensione diversa: vale il telefono ({facts})");
-        if (sizeEqual) return (ItemCategory.DateOnly, $"stessa dimensione, PC più recente ({facts})");
-        return (ItemCategory.Conflict, $"dimensione diversa e PC più recente ({facts})");
+            return (ItemCategory.Identical, o.CompareMode == CompareMode.SizeOnly && !timeEqual
+                ? L.F("identico ({0}, confronto solo dimensione)", facts)
+                : L.F("identico ({0})", facts));
+        if (!timeEqual && diff < 0) return (ItemCategory.Changed, L.F("telefono più recente ({0})", facts));
+        if (!sizeEqual && timeEqual) return (ItemCategory.Changed, L.F("stessa data ma dimensione diversa: vale il telefono ({0})", facts));
+        if (sizeEqual) return (ItemCategory.DateOnly, L.F("stessa dimensione, PC più recente ({0})", facts));
+        return (ItemCategory.Conflict, L.F("dimensione diversa e PC più recente ({0})", facts));
     }
 }

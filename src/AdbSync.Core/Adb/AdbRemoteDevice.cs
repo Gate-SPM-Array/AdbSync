@@ -69,11 +69,11 @@ public sealed class AdbRemoteDevice : IRemoteDevice
             }
             if (first)
             {
-                status?.Invoke($"In attesa del telefono {DisplayName}... (ricollega il cavo / sblocca il telefono se richiesto)");
+                status?.Invoke(L.F("In attesa del telefono {0}... (ricollega il cavo / sblocca il telefono se richiesto)", DisplayName));
                 first = false;
             }
             if (DateTime.UtcNow > deadline)
-                throw new DeviceUnavailableException($"Il telefono non è più raggiungibile da {Format.Duration(timeout)}.");
+                throw new DeviceUnavailableException(L.F("Il telefono non è più raggiungibile da {0}.", Format.Duration(timeout)));
             await Task.Delay(2000, ct);
         }
     }
@@ -85,7 +85,7 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         var sb = new StringBuilder();
         await _env.Client.ExecuteRemoteCommandAsync(command, Device, l => { sb.AppendLine(l); return true; }, Encoding.UTF8, cts.Token);
         if (cts.IsCancellationRequested && !ct.IsCancellationRequested)
-            throw new TimeoutException($"Il comando sul telefono non ha risposto: {command}");
+            throw new TimeoutException(L.F("Il comando sul telefono non ha risposto: {0}", command));
         ct.ThrowIfCancellationRequested();
         return sb.ToString();
     }
@@ -132,7 +132,7 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         catch (Exception ex)
         {
             // Connessione persa a metà: il parser segnalerà la scansione come incompleta (manca il marcatore finale).
-            parser.Feed(RemoteShell.ErrMarker + "connessione con il telefono interrotta durante la scansione: " + ex.Message);
+            parser.Feed(RemoteShell.ErrMarker + L.F("connessione con il telefono interrotta durante la scansione: {0}", ex.Message));
         }
         finally
         {
@@ -141,7 +141,7 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         }
         ct.ThrowIfCancellationRequested();
         if (stalled)
-            parser.Feed(RemoteShell.ErrMarker + $"il telefono non ha inviato dati per {ScanInactivityTimeout.TotalSeconds:0} s: scansione bloccata");
+            parser.Feed(RemoteShell.ErrMarker + L.F("il telefono non ha inviato dati per {0:0} s: scansione bloccata", ScanInactivityTimeout.TotalSeconds));
         filesFound?.Invoke((int)parser.EntriesReceived);
         return parser.Complete();
     }
@@ -182,12 +182,12 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new TimeoutException("il calcolo degli hash sul telefono non ha risposto in tempo");
+            throw new TimeoutException(L.T("il calcolo degli hash sul telefono non ha risposto in tempo"));
         }
         ct.ThrowIfCancellationRequested();
-        if (cts.IsCancellationRequested) throw new TimeoutException("il calcolo degli hash sul telefono non ha risposto in tempo");
+        if (cts.IsCancellationRequested) throw new TimeoutException(L.T("il calcolo degli hash sul telefono non ha risposto in tempo"));
         var result = RemoteShell.ParseHashBatch(lines, out bool complete);
-        if (!complete) throw new IOException("risposta incompleta dal telefono durante il calcolo degli hash");
+        if (!complete) throw new IOException(L.T("risposta incompleta dal telefono durante il calcolo degli hash"));
         return result;
     }
 

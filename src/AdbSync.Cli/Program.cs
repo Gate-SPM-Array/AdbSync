@@ -5,7 +5,7 @@ namespace AdbSync.Cli;
 
 internal static class Program
 {
-    private const string AppVersion = "0.1.2";
+    private const string AppVersion = "0.1.3";
 
     private static async Task<int> Main(string[] args)
     {

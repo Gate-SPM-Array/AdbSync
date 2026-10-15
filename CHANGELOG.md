@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.1.3 — 2026-10-15
+
+### Novità
+- **Lingue con file esterni.** Tutti i testi (interfaccia, log, riepiloghi, riga di comando) passano dai file `lang\<codice>.json` accanto al programma, modificabili da chiunque senza ricompilare.
+  - Incluso l'**inglese** (`lang\en.json`); l'italiano resta incorporato e predefinito.
+  - Si sceglie dal menu della lingua in alto a destra; la scelta si applica al riavvio. CLI: `--lang en`, la variabile `ADBSYNC_LANG` oppure la lingua scelta nell'interfaccia grafica.
+  - Un testo non tradotto resta in italiano; una traduzione che altera i segnaposto `{0}` viene ignorata e segnalata nel log.
+  - Numeri e date seguono il formato della lingua.
+- **File esclusi visibili.** Prima i file scartati dalle regole di esclusione (per esempio le miniature `.thumbnails/`) sparivano senza traccia, e "0 da copiare" sembrava un errore della scansione.
+  - Ora compaiono nella categoria **Esclusi**, con la regola che li ha esclusi; sono compresi i file presenti solo sul PC.
+  - I conteggi sono nel riepilogo del confronto e nel log, regola per regola.
+  - La finestra Esclusioni spiega le regole predefinite e che le regole valgono a partire dalla cartella scelta sul telefono.
+- **Elenco dei nomi convertiti.** Quando un nome contiene caratteri non ammessi su Windows (exFAT/NTFS), ogni sincronizzazione scrive `logs\nomi_convertiti_<data>.txt`. Contiene il tipo, il percorso originale sul telefono, il percorso salvato sul PC e l'esito, anche per le cartelle. Il percorso del file compare nel riepilogo finale e nella riga di comando.
+
+### Altro
+- Il controllo della risposta del telefono usa `printf` invece di `echo`.
+- Test: 96, più 17 nuovi per lingue, esclusi e nomi convertiti. Un test verifica che ogni testo del codice sia tradotto in `en.json` con gli stessi segnaposto.
+
+
 ## v0.1.2 — 2026-10-15
 
 ### Novità

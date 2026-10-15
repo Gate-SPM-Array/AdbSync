@@ -1,6 +1,8 @@
-# AdbSync v0.1.2
+# AdbSync v0.1.3
 
 [English](README.md) · **Italiano**
+
+> **Lingua:** il programma parla **italiano** (incorporato) e **inglese** (`lang\en.json`). Si sceglie dal menu della lingua in alto a destra e si applica al riavvio. Chiunque può aggiungere una lingua con un file JSON: vedi [Traduzioni](#10-traduzioni).
 
 Copia **incrementale** dei file da uno smartphone Android al PC, via **ADB** invece che via MTP.
 Confronta le due cartelle come FreeFileSync e copia **solo i file nuovi o modificati**, con verifica, ritentativi automatici e uno stato dettagliato.
@@ -21,8 +23,9 @@ Modalità di questa versione: **Aggiorna, telefono → PC**. Copia i file nuovi 
 ```
 AdbSync\
   AdbSync.exe, adbsync-cli.exe, README.md (EN), README.it.md (IT), CHANGELOG.md
+  lang\en.json     traduzione inglese (qui si aggiungono altre lingue)
   data\settings.json
-  logs\            log, report CSV, cartelle diagnostica_*
+  logs\            log, report CSV, elenchi nomi_convertiti_*, cartelle diagnostica_*
   platform-tools\  adb.exe e DLL (scaricate da Google)
 ```
 
@@ -46,6 +49,7 @@ Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *
    | Identico | stessa dimensione e data | nessuna |
    | Solo sul PC | non c'è sul telefono | nessuna (mai cancellato) |
    | Collisione nome | due file del telefono che su Windows avrebbero lo stesso nome | saltato e segnalato |
+   | Escluso | corrisponde a una regola di esclusione (es. `.thumbnails/`), sul telefono o solo sul PC | mai toccato; la colonna Note mostra la regola |
 
    Con il tasto destro sull'elenco puoi escludere o includere singoli file: la scelta resta valida anche quando il piano viene ricalcolato, fino al prossimo Confronta. Il doppio clic apre il file in Esplora risorse.
 
@@ -112,7 +116,8 @@ Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *
   - `.pending-*` (file in fase di scrittura);
   - i propri file temporanei.
 
-  Si modificano con il pulsante *Esclusioni…*.
+  Si modificano con il pulsante *Esclusioni…*. Le regole valgono **a partire dalla cartella scelta sul telefono**: scegliendo `/sdcard/Pictures` la cartella `.thumbnails/` al suo interno è esclusa; scegliendo direttamente `/sdcard/Pictures/.thumbnails`, no. I file esclusi sono contati nel riepilogo del confronto e si vedono con il filtro *Esclusi*: un "niente da copiare" non è mai un mistero.
+- **Elenco dei nomi convertiti**: ogni sincronizzazione con nomi convertiti scrive `logs\nomi_convertiti_<data>.txt` con tipo, percorso originale sul telefono, percorso sul PC ed esito, cartelle comprese. Così si risale sempre al nome originale di un file.
 
 Il riquadro *Stato* si ridimensiona trascinando il divisore sopra di esso, e la posizione viene ricordata. L'elenco dei trasferimenti in corso mostra sempre tutti i trasferimenti paralleli.
 
@@ -161,6 +166,7 @@ Codici di uscita: `0` tutto eseguito · `1` errori su alcuni file · `2` interro
 - Da Android 11, `Android/data` e `Android/obb` non sono leggibili via ADB senza root: vengono segnalate come avvisi nel log.
 - Senza *Verifica MD5*, una corruzione che lascia invariata la dimensione del file non è rilevabile. È un caso molto raro, perché ADB usa già un protocollo affidabile su USB.
 - Con più telefoni collegati si sceglie quello da usare dall'elenco.
+- In inglese i plurali non sono gestiti ("1 files").
 - La data di creazione originale dei file del telefono non è leggibile via ADB: viene posta uguale alla data di modifica.
 - Se il disco di destinazione torna con una lettera di unità diversa, la copia non lo ritrova: va ricollegato con la stessa lettera, oppure basta rifare Confronta → Sincronizza indicando il nuovo percorso.
 
@@ -170,7 +176,8 @@ Codici di uscita: `0` tutto eseguito · `1` errori su alcuni file · `2` interro
 src/AdbSync.Core   motore: scansione, confronto, copia robusta (multipiattaforma)
 src/AdbSync.Gui    interfaccia Windows Forms
 src/AdbSync.Cli    riga di comando
-tests/             79 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
+lang/              file di traduzione (en.json = riferimento)
+tests/             96 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
 ```
 
 Compilazione: .NET 10 SDK → `dotnet build`. Test: `dotnet test`.
@@ -181,9 +188,22 @@ Pubblicazione:
 dotnet publish src/AdbSync.Gui -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
 ```
 
-## 9. Licenza e crediti
+## 9. Licenza
 
 Rilasciato con licenza [MIT](LICENSE). Componenti di terze parti: vedi [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
+
+## 10. Traduzioni
+
+Tutti i testi del programma passano dai file `lang\<codice>.json` accanto all'eseguibile. Per aggiungere una lingua:
+
+1. Copia `lang\en.json` in `lang\<codice>.json`, per esempio `de.json`.
+2. Imposta `"code"`, `"language"` (il nome mostrato nel menu), `"culture"` (formato di numeri e date, per esempio `de-DE`) e `"translators"`.
+3. Traduci i **valori** in `"strings"`. Le chiavi sono i testi italiani originali e non vanno modificate. Lascia identici i segnaposto come `{0}` o `{1:0.0}`: una traduzione che li altera viene ignorata e segnalata nel log.
+4. Riavvia AdbSync e scegli la lingua. I testi non tradotti restano in italiano, e il log dice quanti ne mancano.
+
+Le pull request con nuove lingue sono benvenute.
+
+## 11. Crediti
 
 Sviluppato da [Gate-SPM-Array](https://github.com/Gate-SPM-Array) con [Claude](https://claude.com) (Anthropic), che ha scritto il codice sulla base di requisiti, scelte di progetto e collaudo su telefoni reali del maintainer.
 

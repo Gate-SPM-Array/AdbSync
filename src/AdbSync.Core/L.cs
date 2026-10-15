@@ -37,8 +37,13 @@ public static class L
     public static string LangDirectory => Path.Combine(AppPaths.BaseDirectory, "lang");
 
     /// <summary>Traduce un testo fisso.</summary>
-    public static string T(string italian) =>
-        _map.Count != 0 && _map.TryGetValue(italian, out var t) ? t : italian;
+    public static string T(string italian)
+    {
+        if (_map.Count == 0) return italian;
+        // Un checkout Windows può portare "a capo" CRLF nei testi su più righe: le chiavi usano sempre LF.
+        string key = italian.Contains('\r') ? italian.Replace("\r\n", "\n") : italian;
+        return _map.TryGetValue(key, out var t) ? t : italian;
+    }
 
     /// <summary>Traduce un testo con segnaposto {0}, {1}… e lo compone.</summary>
     public static string F(string italianFormat, params object?[] args)
@@ -109,13 +114,14 @@ public static class L
         foreach (var (key, value) in file.Strings ?? new Dictionary<string, string>())
         {
             if (string.IsNullOrEmpty(value)) continue;            // non tradotto: resta l'italiano
+            string k = key.Replace("\r\n", "\n");
             if (!SamePlaceholders(key, value))
             {
                 rejected++;
                 if (rejected <= 10) msgs.Add($"Traduzione ignorata (segnaposto {{0}}… diversi dall'originale): \"{Shorten(key)}\"");
                 continue;
             }
-            map[key] = value;
+            map[k] = value;
         }
         if (rejected > 10) msgs.Add($"… altre {rejected - 10} traduzioni ignorate per segnaposto diversi.");
 

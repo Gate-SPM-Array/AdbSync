@@ -60,7 +60,7 @@ public sealed class AdbRemoteDevice : IRemoteDevice
                     using var probe = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     probe.CancelAfter(TimeSpan.FromSeconds(10));
                     var sb = new StringBuilder();
-                    await _env.Client.ExecuteRemoteCommandAsync("echo ok", Device, l => { sb.Append(l); return true; }, Encoding.UTF8, probe.Token);
+                    await _env.Client.ExecuteRemoteCommandAsync("printf ok", Device, l => { sb.Append(l); return true; }, Encoding.UTF8, probe.Token);
                     if (sb.ToString().Contains("ok")) return;
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }

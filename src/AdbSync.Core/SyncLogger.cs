@@ -7,7 +7,7 @@ public enum LogLevel { Debug, Info, Warning, Error }
 public sealed record LogEntry(DateTime Time, LogLevel Level, string Message)
 {
     public override string ToString() =>
-        $"{Time:HH:mm:ss} {Level switch { LogLevel.Error => "ERRORE ", LogLevel.Warning => "AVVISO ", LogLevel.Debug => "debug  ", _ => "       " }}{Message}";
+        $"{Time:HH:mm:ss} {Level switch { LogLevel.Error => L.T("ERRORE").PadRight(7), LogLevel.Warning => L.T("AVVISO").PadRight(7), LogLevel.Debug => "debug  ", _ => "       " }}{Message}";
 }
 
 /// <summary>Log su file (scritto subito, così sopravvive a crash) e notifica all'interfaccia.</summary>

@@ -250,6 +250,24 @@ public class LocalizationTests
         Assert.Equal(EnglishStrings().Count(kv => kv.Value.Length > 0), map.Count);
     }
 
+    [Fact]
+    public void WindowsLineEndingsInKeysAreNormalized()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "adbsync_lang_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "en.json"), JsonSerializer.Serialize(new
+            {
+                code = "en", language = "English",
+                strings = new Dictionary<string, string> { ["Riga uno\r\nRiga due"] = "Line one\r\nLine two" },
+            }));
+            var (_, _, map, _) = L.Prepare("en", dir);
+            Assert.True(map.ContainsKey("Riga uno\nRiga due"));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [Theory]
     [InlineData("Copiati {0} di {1}", "{0} of {1} copied", true)]
     [InlineData("{0,-9} {1:0.0}%", "{1:0.0}% {0,-9}", true)]

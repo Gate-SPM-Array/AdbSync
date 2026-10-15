@@ -1,4 +1,4 @@
-# AdbSync v0.1.2
+# AdbSync v0.1.3
 
 **English** · [Italiano](README.it.md)
 
@@ -7,7 +7,7 @@ It compares the two folders the way FreeFileSync does and copies **only new or c
 
 Mode of this version: **Update, phone → PC**. New and changed files are copied; **nothing is ever deleted**, neither on the PC nor on the phone.
 
-> **Language:** the program's user interface is currently in **Italian**. English (and user-editable translation files) is planned for the next version. Button and label names below are given in Italian with the English meaning.
+> **Language:** the program speaks **Italian** (built in) and **English** (`lang\en.json`). Choose it from the language box at the top right; it applies at the next start. Translations are plain JSON files anyone can add: see [Translations](#10-translations). Below, UI names are given in English with the Italian label in brackets.
 
 ---
 
@@ -23,8 +23,9 @@ Mode of this version: **Update, phone → PC**. New and changed files are copied
 ```
 AdbSync\
   AdbSync.exe, adbsync-cli.exe, README.md (EN), README.it.md (IT), CHANGELOG.md
+  lang\en.json     English translation (add more languages here)
   data\settings.json
-  logs\            logs, CSV reports, diagnostica_* folders
+  logs\            logs, CSV reports, nomi_convertiti_* lists, diagnostica_* folders
   platform-tools\  adb.exe and DLLs (downloaded from Google)
 ```
 
@@ -48,6 +49,7 @@ To move or delete the program folder while adb is running: menu *adb… → Arre
    | Identical (*Identico*) | same size and date | none |
    | PC only (*Solo sul PC*) | not on the phone | none (never deleted) |
    | Name collision (*Collisione nome*) | two phone files that would get the same name on Windows | skipped and reported |
+   | Excluded (*Escluso*) | matched by an exclusion rule (e.g. `.thumbnails/`), on the phone or only on the PC | never touched; the Note column shows the rule |
 
    Right-click the list to exclude or include single files: the choice stays valid when the plan is recalculated, until the next Compare. Double-click opens the file in Explorer.
 
@@ -114,7 +116,8 @@ To move or delete the program folder while adb is running: menu *adb… → Arre
   - `.pending-*` (files being written);
   - the program's own temporary files.
 
-  They can be changed with the *Esclusioni…* (Exclusions) button.
+  They can be changed with the *Esclusioni…* (Exclusions) button. Rules apply **relative to the chosen phone folder**: choosing `/sdcard/Pictures` excludes `.thumbnails/` inside it, choosing `/sdcard/Pictures/.thumbnails` itself does not. Excluded files are counted in the compare summary and shown with the *Excluded* filter, so a "nothing to copy" result is never a mystery.
+- **Converted names list**: every sync with converted names writes `logs\nomi_convertiti_<date>.txt` with type, original phone path, PC path and outcome (folders included), so you can always trace a file back to its original name.
 
 The *Stato* (Status) panel can be resized by dragging the splitter above it, and its size is remembered. The active-transfers list always shows all parallel transfers.
 
@@ -162,6 +165,7 @@ Exit codes: `0` everything done · `1` errors on some files · `2` aborted or in
 - Since Android 11, `Android/data` and `Android/obb` cannot be read over ADB without root: they are reported as warnings in the log.
 - Without *MD5 verification*, corruption that leaves the file size unchanged cannot be detected. This is very rare, because ADB already uses a reliable protocol over USB.
 - With several phones connected, you pick the one to use from the list.
+- English plurals are not handled ("1 files").
 - The phone's original file creation date is not readable over ADB: it is set equal to the modification date.
 - If the destination disk comes back with a different drive letter, the copy cannot find it: reconnect it with the same letter, or simply redo Compare → Sync with the new path.
 
@@ -171,7 +175,8 @@ Exit codes: `0` everything done · `1` errors on some files · `2` aborted or in
 src/AdbSync.Core   engine: scan, compare, robust copy (cross-platform)
 src/AdbSync.Gui    Windows Forms user interface
 src/AdbSync.Cli    command line
-tests/             79 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
+lang/              translation files (en.json = reference)
+tests/             96 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
 ```
 
 Build: .NET 10 SDK → `dotnet build`. Tests: `dotnet test`.
@@ -182,9 +187,22 @@ Publish:
 dotnet publish src/AdbSync.Gui -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
 ```
 
-## 9. License and credits
+## 9. License
 
 Released under the [MIT](LICENSE) license. Third-party components: see [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
+
+## 10. Translations
+
+Every text of the program goes through `lang\<code>.json` files next to the exe. To add a language:
+
+1. Copy `lang\en.json` to `lang\<code>.json` (e.g. `de.json`).
+2. Set `"code"`, `"language"` (name shown in the menu), `"culture"` (number/date format, e.g. `de-DE`) and `"translators"`.
+3. Translate the **values** in `"strings"`. Keys are the original Italian texts and must not be changed. Keep placeholders such as `{0}` or `{1:0.0}` exactly: a translation that changes them is ignored and reported in the log.
+4. Restart AdbSync and pick the language. Untranslated texts stay in Italian, and the log tells how many are missing.
+
+Pull requests with new languages are welcome.
+
+## 11. Credits
 
 Developed by [Gate-SPM-Array](https://github.com/Gate-SPM-Array) with [Claude](https://claude.com) (Anthropic), which wrote the code based on the maintainer's requirements, design decisions and testing on real phones.
 

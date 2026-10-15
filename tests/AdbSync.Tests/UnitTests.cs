@@ -475,3 +475,27 @@ public class ClassifyTests
         Assert.Equal(1, plan.CountToCopy);
     }
 }
+
+public class PathMapperDescribeTests
+{
+    [Theory]
+    [InlineData("a?b", "a？b", "\"?\" → \"？\" (U+FF1F)")]
+    [InlineData("dir/file.", "dir/file．", "punto finale → \"．\" (U+FF0E)")]
+    [InlineData("nome ", "nome␣", "spazio finale → \"␣\" (U+2423)")]
+    [InlineData("CON.txt", "_CON.txt", "\"CON.txt\" è un nome riservato di Windows: aggiunto \"_\" davanti")]
+    [InlineData("x?y/a?b.", "x？y/a？b．", "\"?\" → \"？\" (U+FF1F); punto finale → \"．\" (U+FF0E)")]
+    [InlineData("ok/ok", "ok/ok", "")]
+    public void DescribesSubstitutions(string remote, string local, string expected) =>
+        Assert.Equal(expected, AdbSync.Core.PathMapper.DescribeChanges(remote, local));
+
+    [Fact]
+    public void DescriptionMatchesTheActualMapping()
+    {
+        foreach (var name in new[] { "a:b*c|d", "file.", "x\u0001y", "AUX", "dir:1/f?.txt" })
+        {
+            var (local, changed) = AdbSync.Core.PathMapper.ToLocalRelative(name);
+            Assert.True(changed);
+            Assert.NotEqual("", AdbSync.Core.PathMapper.DescribeChanges(name, local));
+        }
+    }
+}

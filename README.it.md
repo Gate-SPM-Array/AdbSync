@@ -118,7 +118,7 @@ Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *
   - i propri file temporanei.
 
   Si modificano con il pulsante *Esclusioni…*. Le regole valgono **a partire dalla cartella scelta sul telefono**: scegliendo `/sdcard/Pictures` la cartella `.thumbnails/` al suo interno è esclusa; scegliendo direttamente `/sdcard/Pictures/.thumbnails`, no. I file esclusi sono contati nel riepilogo del confronto e si vedono con il filtro *Esclusi*: un "niente da copiare" non è mai un mistero.
-- **Elenco dei nomi convertiti**: ogni sincronizzazione con nomi convertiti scrive `logs\nomi_convertiti_<data>.txt` con tipo, percorso originale sul telefono, percorso sul PC ed esito, cartelle comprese. Così si risale sempre al nome originale di un file.
+- **Elenco dei nomi convertiti**: ogni sincronizzazione con nomi convertiti scrive `logs\nomi_convertiti_<data>.txt` con tipo, percorso originale sul telefono, percorso sul PC, esito e le sostituzioni in chiaro, per esempio `"?" → "？" (U+FF1F)`, cartelle comprese. Così si risale sempre al nome originale di un file.
 
 Il riquadro *Stato* si ridimensiona trascinando il divisore sopra di esso, e la posizione viene ricordata. L'elenco dei trasferimenti in corso mostra sempre tutti i trasferimenti paralleli.
 
@@ -178,7 +178,7 @@ src/AdbSync.Core   motore: scansione, confronto, copia robusta (multipiattaforma
 src/AdbSync.Gui    interfaccia Windows Forms
 src/AdbSync.Cli    riga di comando
 lang/              file di traduzione (en.json = riferimento)
-tests/             96 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
+tests/             103 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
 ```
 
 Compilazione: .NET 10 SDK → `dotnet build`. Test: `dotnet test`.

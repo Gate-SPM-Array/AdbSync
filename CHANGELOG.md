@@ -19,11 +19,11 @@
   - *Aiuto*: guida online (F1), guida nel programma (README), pagina del progetto su GitHub, segnalazioni, versioni, Informazioni.
   - Gli indirizzi non sono scritti nel codice: si leggono da `adbsync.ini` accanto al programma, e chi pubblica una versione derivata cambia solo quel file.
 - **Pulsanti più chiari**: 🔍 *Confronta* (analizza, non scrive nulla), ▶ *Sincronizza* (avvia la copia), ■ *Annulla* (ferma).
-- **Elenco dei nomi convertiti.** Quando un nome contiene caratteri non ammessi su Windows (exFAT/NTFS), ogni sincronizzazione scrive `logs\nomi_convertiti_<data>.txt`. Contiene il tipo, il percorso originale sul telefono, il percorso salvato sul PC e l'esito, anche per le cartelle. Il percorso del file compare nel riepilogo finale e nella riga di comando.
+- **Elenco dei nomi convertiti.** Quando un nome contiene caratteri non ammessi su Windows (exFAT/NTFS), ogni sincronizzazione scrive `logs\nomi_convertiti_<data>.txt`. Contiene il tipo, il percorso originale sul telefono, il percorso salvato sul PC, l'esito e le **sostituzioni in chiaro** (es. `"?" → "？" (U+FF1F)`, `punto finale → "．"`), anche per le cartelle. Il percorso del file compare nel riepilogo finale e nella riga di comando.
 
 ### Altro
 - Il controllo della risposta del telefono usa `printf` invece di `echo`.
-- Test: 96, più 17 nuovi per lingue, esclusi e nomi convertiti. Un test verifica che ogni testo del codice sia tradotto in `en.json` con gli stessi segnaposto.
+- Test: 103, di cui 24 nuovi per lingue, esclusi e nomi convertiti. Un test verifica che ogni testo del codice sia tradotto in `en.json` con gli stessi segnaposto.
 
 
 ## v0.1.2 — 2026-10-15

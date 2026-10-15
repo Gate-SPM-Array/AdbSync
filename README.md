@@ -118,7 +118,7 @@ To move or delete the program folder while adb is running: menu *adb… → Arre
   - the program's own temporary files.
 
   They can be changed with the *Esclusioni…* (Exclusions) button. Rules apply **relative to the chosen phone folder**: choosing `/sdcard/Pictures` excludes `.thumbnails/` inside it, choosing `/sdcard/Pictures/.thumbnails` itself does not. Excluded files are counted in the compare summary and shown with the *Excluded* filter, so a "nothing to copy" result is never a mystery.
-- **Converted names list**: every sync with converted names writes `logs\nomi_convertiti_<date>.txt` with type, original phone path, PC path and outcome (folders included), so you can always trace a file back to its original name.
+- **Converted names list**: every sync with converted names writes `logs\nomi_convertiti_<date>.txt` with type, original phone path, PC path, outcome and the substitutions spelled out, e.g. `"?" → "？" (U+FF1F)` (folders included), so you can always trace a file back to its original name.
 
 The *Stato* (Status) panel can be resized by dragging the splitter above it, and its size is remembered. The active-transfers list always shows all parallel transfers.
 
@@ -177,7 +177,7 @@ src/AdbSync.Core   engine: scan, compare, robust copy (cross-platform)
 src/AdbSync.Gui    Windows Forms user interface
 src/AdbSync.Cli    command line
 lang/              translation files (en.json = reference)
-tests/             96 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
+tests/             103 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
 ```
 
 Build: .NET 10 SDK → `dotnet build`. Tests: `dotnet test`.

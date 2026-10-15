@@ -618,13 +618,16 @@ public sealed class SyncEngine
             w.WriteLine(L.T("AdbSync — nomi convertiti perché non ammessi su Windows (exFAT/NTFS)"));
             w.WriteLine(L.F("Telefono: {0}", plan.RemoteRoot));
             w.WriteLine(L.F("PC:       {0}", plan.LocalRoot));
-            w.WriteLine(L.T("Colonne (separate da TAB): tipo, percorso sul telefono, percorso sul PC, esito"));
+            w.WriteLine(L.T("I caratteri non ammessi da Windows sono sostituiti con caratteri Unicode quasi identici a vista (es. ? → ？ a larghezza piena, punto finale → ．): il nome resta leggibile e la conversione è sempre la stessa, così la copia incrementale li riconosce."));
+            w.WriteLine(L.T("Colonne (separate da TAB): tipo, percorso sul telefono, percorso sul PC, esito, sostituzioni"));
             w.WriteLine();
             foreach (var d in dirs)
                 w.WriteLine(string.Join('\t', L.T("cartella"), d.RelativePath, d.LocalRelativePath.Replace('/', '\\'),
-                    d.Error is not null ? L.F("errore: {0}", d.Error) : d.Created ? L.T("creata") : L.T("presente")));
+                    d.Error is not null ? L.F("errore: {0}", d.Error) : d.Created ? L.T("creata") : L.T("presente"),
+                    PathMapper.DescribeChanges(d.RelativePath, d.LocalRelativePath)));
             foreach (var i in files)
-                w.WriteLine(string.Join('\t', L.T("file"), i.RelativePath, i.LocalRelativePath.Replace('/', '\\'), RenamedOutcome(i)));
+                w.WriteLine(string.Join('\t', L.T("file"), i.RelativePath, i.LocalRelativePath.Replace('/', '\\'), RenamedOutcome(i),
+                    PathMapper.DescribeChanges(i.RelativePath, i.LocalRelativePath)));
             return (path, dirs.Count + files.Count);
         }
         catch (Exception ex)

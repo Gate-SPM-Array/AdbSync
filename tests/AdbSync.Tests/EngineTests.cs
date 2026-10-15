@@ -731,8 +731,8 @@ public sealed class EngineV013Tests : IDisposable
         Assert.NotNull(r.RenamedLogPath);
         Assert.Equal(3, r.RenamedCount);   // 1 cartella + 2 file (anche quello dentro la cartella convertita)
         var lines = File.ReadAllLines(r.RenamedLogPath!);
-        Assert.Contains(lines, l => l == "file\tNote: idea?.txt\tNote： idea？.txt\tcopiato");
-        Assert.Contains(lines, l => l == "cartella\tCartella <1>\tCartella ＜1＞\tcreata");
+        Assert.Contains(lines, l => l == "file\tNote: idea?.txt\tNote： idea？.txt\tcopiato\t\":\" → \"：\" (U+FF1A); \"?\" → \"？\" (U+FF1F)");
+        Assert.Contains(lines, l => l == "cartella\tCartella <1>\tCartella ＜1＞\tcreata\t\"<\" → \"＜\" (U+FF1C); \">\" → \"＞\" (U+FF1E)");
         Assert.Contains(lines, l => l.StartsWith("file\tCartella <1>/foto.jpg\tCartella ＜1＞\\foto.jpg\t", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.Contains("normale.jpg"));
     }

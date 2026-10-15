@@ -101,6 +101,41 @@ public static class PathMapper
         return result;
     }
 
+    /// <summary>
+    /// Descrive in chiaro le sostituzioni fatte tra il nome del telefono e quello sul PC, ad esempio
+    /// <c>"?" → "？" (U+FF1F)</c>: i caratteri sostitutivi sono quasi identici a vista, senza spiegazione non si notano.
+    /// </summary>
+    public static string DescribeChanges(string remoteRelative, string localRelative)
+    {
+        var remote = remoteRelative.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var local = localRelative.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var notes = new List<string>();
+        void Add(string n) { if (!notes.Contains(n)) notes.Add(n); }
+        for (int s = 0; s < Math.Min(remote.Length, local.Length); s++)
+        {
+            string r = remote[s], l = local[s];
+            if (r == l) continue;
+            if (l.Length == r.Length + 1 && l[0] == '_' && !r.StartsWith('_'))
+            {
+                Add(L.F("\"{0}\" è un nome riservato di Windows: aggiunto \"_\" davanti", r));
+                l = l[1..];
+            }
+            if (l.Length != r.Length) { Add(L.F("\"{0}\" → \"{1}\"", r, l)); continue; }
+            int trailing = r.Length;
+            while (trailing > 0 && r[trailing - 1] is '.' or ' ') trailing--;
+            for (int i = 0; i < r.Length; i++)
+            {
+                char a = r[i], b = l[i];
+                if (a == b) continue;
+                if (i >= trailing && a == '.') Add(L.F("punto finale → \"{0}\" (U+{1:X4})", b, (int)b));
+                else if (i >= trailing && a == ' ') Add(L.F("spazio finale → \"{0}\" (U+{1:X4})", b, (int)b));
+                else if (a < 32) Add(L.F("carattere di controllo U+{0:X4} → \"{1}\" (U+{2:X4})", (int)a, b, (int)b));
+                else Add(L.F("\"{0}\" → \"{1}\" (U+{2:X4})", a, b, (int)b));
+            }
+        }
+        return string.Join("; ", notes);
+    }
+
     public static string ToLocalFullPath(string localRoot, string localRelative) =>
         Path.Combine(localRoot, localRelative.Replace('/', Path.DirectorySeparatorChar));
 

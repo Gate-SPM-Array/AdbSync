@@ -11,7 +11,7 @@ internal sealed class MainForm : Form
     private static readonly string AppVersion = "0.1.2";
 
     // --- stato ---
-    private readonly IReadOnlyList<string> _migration = AppPaths.MigrateLegacy(); // prima di caricare le impostazioni
+    private readonly IReadOnlyList<string> _migration = Program.MigrationMessages; // eseguita in Program.Main, prima di tutto
     private readonly AppSettings _settings = AppSettings.Load();
     private readonly SyncLogger _log = new(SyncLogger.DefaultLogDirectory);
     private readonly ConcurrentQueue<LogEntry> _pendingLog = new();
@@ -54,6 +54,8 @@ internal sealed class MainForm : Form
     private readonly Button _btnSync = new() { Text = "② Sincronizza", AutoSize = true, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(8, 2, 8, 2), Enabled = false };
     private readonly Button _btnCancel = new() { Text = "Annulla", AutoSize = true, Enabled = false, Padding = new Padding(8, 2, 8, 2) };
     private readonly Button _btnAdb = new() { Text = "adb...", AutoSize = true };
+    private readonly ComboBox _cmbLang = new() { DropDownStyle = ComboBoxStyle.DropDownList, Anchor = AnchorStyles.Left };
+    private readonly IReadOnlyList<string> _langMessages = Program.LanguageMessages;
     private readonly Label _lblAdb = new() { AutoSize = true, ForeColor = SystemColors.GrayText, Anchor = AnchorStyles.Left };
 
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
@@ -97,6 +99,8 @@ internal sealed class MainForm : Form
         _log.EntryWritten += e => _pendingLog.Enqueue(e);
         _log.Info($"AdbSync {AppVersion} — dati in {(AppPaths.IsPortable ? "cartella del programma (portable)" : "AppData (cartella del programma non scrivibile)")}: {Path.GetDirectoryName(AppPaths.DataDirectory)}");
         foreach (var m in _migration) _log.Info(m);
+        if (L.Code != L.DefaultCode) _log.Info($"Language: {L.Name} ({L.Code})");
+        foreach (var m in _langMessages) _log.Warn(m);
         _uiTimer.Tick += (_, _) => UiTick();
         _uiTimer.Start();
         Shown += async (_, _) => await InitAdbAsync(interactive: true);
@@ -183,7 +187,7 @@ internal sealed class MainForm : Form
         tip.SetToolTip(_chkDiagnostic, "A ogni confronto salva in logs\\diagnostica_<data> l'elenco completo dei file del telefono, del PC e del piano con il motivo di ogni decisione.");
 
         // --- pulsanti ---
-        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 6 };
+        var actions = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 7 };
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -196,6 +200,9 @@ internal sealed class MainForm : Form
         actions.Controls.Add(new Label(), 3, 0);
         actions.Controls.Add(_lblAdb, 4, 0);
         actions.Controls.Add(_btnAdb, 5, 0);
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        actions.Controls.Add(_cmbLang, 6, 0);
+        InitLanguageCombo();
         root.Controls.Add(actions, 0, 2);
 
         // --- scheda File ---
@@ -724,6 +731,37 @@ internal sealed class MainForm : Form
         return plan;
     }
 
+    // =====================================================================  LINGUA
+
+    private bool _langInit;
+
+    private void InitLanguageCombo()
+    {
+        _langInit = true;
+        var langs = L.Available();
+        _cmbLang.Items.Clear();
+        foreach (var l in langs) _cmbLang.Items.Add(l);
+        _cmbLang.SelectedItem = langs.FirstOrDefault(l => l.Code.Equals(L.Code, StringComparison.OrdinalIgnoreCase)) ?? langs[0];
+        _cmbLang.Width = S(110);
+        _langInit = false;
+        _cmbLang.SelectedIndexChanged += (_, _) => LanguageChanged();
+    }
+
+    /// <summary>La lingua si applica al riavvio: tutti i testi dell'interfaccia vengono creati all'avvio.</summary>
+    private void LanguageChanged()
+    {
+        if (_langInit || _cmbLang.SelectedItem is not LanguageInfo lang) return;
+        if (lang.Code.Equals(_settings.Language, StringComparison.OrdinalIgnoreCase)) return;
+        _settings.Language = lang.Code;
+        SaveControlsIntoSettings();
+        _settings.Save();
+        // messaggio bilingue: la nuova lingua non è ancora caricata
+        var answer = MessageBox.Show(this,
+            "La lingua verrà applicata al prossimo avvio. Riavviare ora?\n\nThe language will be applied at the next start. Restart now?",
+            "AdbSync", _busy ? MessageBoxButtons.OK : MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+        if (!_busy && answer == DialogResult.Yes) Application.Restart();
+    }
+
     private static string CountsText(SyncPlan p) =>
         $"Elenco: telefono {Format.Number(p.RemoteFileCount)} file e {Format.Number(p.RemoteDirCount)} cartelle  ·  " +
         $"PC {Format.Number(p.LocalFileCount)} file e {Format.Number(p.LocalDirCount)} cartelle  ·  " +
@@ -809,7 +847,7 @@ internal sealed class MainForm : Form
     {
         _busy = busy;
         foreach (var c in new Control[] { _btnCompare, _btnRefresh, _btnBrowseRemote, _btnBrowseLocal, _txtRemote, _txtLocal, _cmbDevice,
-                     _chkSizeOnly, _chkDst, _chkOverwrite, _chkVerify, _numParallel, _numStall, _numRetries, _btnExcludes, _btnAdb, _chkDiagnostic, _cmbAlign })
+                     _chkSizeOnly, _chkDst, _chkOverwrite, _chkVerify, _numParallel, _numStall, _numRetries, _btnExcludes, _btnAdb, _chkDiagnostic, _cmbAlign, _cmbLang })
             c.Enabled = !busy;
         _btnCancel.Enabled = busy && _cts is not null && !_cts.IsCancellationRequested;
         _btnSync.Enabled = !busy && _plan is { } p && p.HasWork;

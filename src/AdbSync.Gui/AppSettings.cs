@@ -21,6 +21,8 @@ internal sealed class AppSettings
     public bool ShowDetailedLog { get; set; }
 
     public bool Diagnostic { get; set; }
+    /// <summary>Lingua dell'interfaccia: "it" (incorporata) o il codice di un file lang\&lt;codice&gt;.json.</summary>
+    public string Language { get; set; } = L.DefaultCode;
     public DateAlignMode AlignSameSizeDates { get; set; } = DateAlignMode.None;
     /// <summary>Posizione del divisore tra le schede e il riquadro Stato (0 = automatica).</summary>
     public int SplitterDistance { get; set; }

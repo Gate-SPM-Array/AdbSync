@@ -31,6 +31,7 @@ internal static class Program
           --wait-device <secondi>    attesa massima di riconnessione (predefinito 300)
           --verify                   verifica MD5 di ogni file copiato
           --diagnostic               salva gli elenchi completi file per file nella cartella logs
+          --lang <codice>            lingua dei messaggi (it, en, ... = file lang\<codice>.json); predefinita: quella dell'interfaccia grafica
           --list                     (compare) elenca i file da copiare
           --yes                      (sync) non chiedere conferma
 
@@ -43,6 +44,8 @@ internal static class Program
     private static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
+        var langMessages = L.Load(LanguageFromArgs(args));
+        foreach (var m in langMessages) Console.Error.WriteLine(m);
         if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
         {
             Console.WriteLine($"AdbSync v{AppVersion}");
@@ -183,6 +186,24 @@ internal static class Program
         }
     }
 
+    /// <summary>Lingua: --lang &lt;codice&gt;, altrimenti variabile ADBSYNC_LANG, altrimenti quella scelta nell'interfaccia grafica.</summary>
+    private static string? LanguageFromArgs(string[] args)
+    {
+        int i = Array.IndexOf(args, "--lang");
+        if (i >= 0 && i + 1 < args.Length) return args[i + 1];
+        if (Environment.GetEnvironmentVariable("ADBSYNC_LANG") is { Length: > 0 } env) return env;
+        try
+        {
+            if (File.Exists(AppPaths.SettingsFile))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(AppPaths.SettingsFile));
+                if (doc.RootElement.TryGetProperty("Language", out var l) && l.ValueKind == System.Text.Json.JsonValueKind.String) return l.GetString();
+            }
+        }
+        catch { /* impostazioni illeggibili: italiano */ }
+        return null;
+    }
+
     private static string Describe(SyncProgress p)
     {
         var (bps, eta) = p.Sample();
@@ -271,6 +292,7 @@ internal static class Program
                     case "--diagnostic": a.Diagnostic = true; break;
                     case "--yes": case "-y": a.Yes = true; break;
                     case "--list": a.List = true; break;
+                    case "--lang": Next(); break; // già gestita all'avvio (LanguageFromArgs)
                     default: throw new ArgumentException($"opzione sconosciuta '{args[i]}'");
                 }
             }

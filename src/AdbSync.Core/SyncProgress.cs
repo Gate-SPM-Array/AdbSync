@@ -28,7 +28,7 @@ public sealed class SyncProgress
     private long _committedBytes;
     private long _failedBytes;
     private int _done, _failed, _retrying;
-    private volatile string _phase = "Pronto";
+    private volatile string _phase = L.T("Pronto"); // istanza creata dopo il caricamento della lingua
     private volatile string? _status;
 
     public ConcurrentDictionary<int, ActiveTransfer> Active { get; } = new();

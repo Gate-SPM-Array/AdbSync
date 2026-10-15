@@ -499,3 +499,26 @@ public class PathMapperDescribeTests
         }
     }
 }
+
+public class VersionConsistencyTests
+{
+    /// <summary>Ogni versione consegnata ha un numero unico, uguale ovunque e documentato in testa al CHANGELOG.</summary>
+    [Fact]
+    public void VersionIsTheSameEverywhereAndDocumented()
+    {
+        string root = LocalizationTests.RepoRoot();
+        string Read(string rel) => File.ReadAllText(Path.Combine(root, rel));
+        string Match(string text, string pattern) =>
+            System.Text.RegularExpressions.Regex.Match(text, pattern) is { Success: true } m ? m.Groups[1].Value : "(non trovato)";
+
+        string v = Match(Read("src/AdbSync.Core/AdbSync.Core.csproj"), @"<Version>([^<]+)</Version>");
+        Assert.Matches(@"^\d+\.\d+\.\d+$", v);
+        Assert.Equal(v, Match(Read("src/AdbSync.Gui/AdbSync.Gui.csproj"), @"<Version>([^<]+)</Version>"));
+        Assert.Equal(v, Match(Read("src/AdbSync.Cli/AdbSync.Cli.csproj"), @"<Version>([^<]+)</Version>"));
+        Assert.Equal(v, Match(Read("src/AdbSync.Gui/MainForm.cs"), @"AppVersion = ""([^""]+)"""));
+        Assert.Equal(v, Match(Read("src/AdbSync.Cli/Program.cs"), @"AppVersion = ""([^""]+)"""));
+        Assert.Equal(v, Match(Read("CHANGELOG.md"), @"(?m)^## v(\S+)"));
+        Assert.Equal(v, Match(Read("README.md"), @"^# AdbSync v(\S+)"));
+        Assert.Equal(v, Match(Read("README.it.md"), @"^# AdbSync v(\S+)"));
+    }
+}

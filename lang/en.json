@@ -3,7 +3,7 @@
   "language": "English",
   "culture": "en-GB",
   "translators": "Claude (Anthropic)",
-  "app_version": "0.1.3",
+  "app_version": "0.1.5",
   "strings": {
     "  ... e altri {0} (elenco completo con la modalità diagnostica).": "  ... and {0} more (full list with diagnostic mode).",
     "  link: {0}": "  link: {0}",

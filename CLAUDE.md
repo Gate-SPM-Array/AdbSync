@@ -29,5 +29,6 @@ Release packages are named with the version: `AdbSync_vX.Y.Z_win-x64.zip`.
 
 ## Conventions
 - **Localization:** every user-facing text (GUI, log messages, summaries, CLI, exception messages shown to the user) goes through `L.T("testo italiano")` or `L.F("testo {0}", x)` with a literal (no `$"..."`, no variables), and gets its English translation in `lang/en.json` with identical placeholders. `LocalizationTests` enforces this. Keep the Italian text unchanged when refactoring (it is the key). Do not translate shell commands, markers, file names, CSV/TSV headers or parsed adb messages. Code identifiers and comments: English or Italian as in the surrounding file.
+- **Versioning (maintainer's rule): every code change that is delivered — a zip, or a commit that changes code in a PR — gets a NEW version number (at least PATCH +1) and its own `CHANGELOG.md` entry. Never deliver two different builds with the same number.** `VersionConsistencyTests` checks that the number matches everywhere.
 - Bump `<Version>` in all three csproj files and `AppVersion` in `MainForm.cs` / CLI `Program.cs` together; update `CHANGELOG.md` and both READMEs (`README.md` English, default on GitHub; `README.it.md` Italian) keeping them in sync.
 - Scale target: about 1,000,000 files per phone; keep per-file memory low (no per-file strings that are not needed).

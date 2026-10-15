@@ -8,7 +8,7 @@ namespace AdbSync.Gui;
 
 internal sealed class MainForm : Form
 {
-    private static readonly string AppVersion = "0.1.3";
+    private static readonly string AppVersion = "0.1.5";
 
     // --- stato ---
     private readonly IReadOnlyList<string> _migration = Program.MigrationMessages; // eseguita in Program.Main, prima di tutto

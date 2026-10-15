@@ -22,21 +22,21 @@ internal sealed class RemoteFolderDialog : Form
     public RemoteFolderDialog(IRemoteDevice device, string startPath)
     {
         _device = device;
-        Text = "Scegli la cartella sul telefono";
+        Text = L.T("Scegli la cartella sul telefono");
         StartPosition = FormStartPosition.CenterParent;
         Size = new Size(LogicalToDeviceUnits(620), LogicalToDeviceUnits(520));
         MinimumSize = new Size(LogicalToDeviceUnits(420), LogicalToDeviceUnits(360));
         ShowInTaskbar = false;
         MinimizeBox = false;
 
-        var up = new Button { Text = "↑ Su", AutoSize = true };
-        var go = new Button { Text = "Vai", AutoSize = true };
+        var up = new Button { Text = L.T("↑ Su"), AutoSize = true };
+        var go = new Button { Text = L.T("Vai"), AutoSize = true };
         var shortcuts = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
-        shortcuts.Items.Add("Scorciatoie...");
+        shortcuts.Items.Add(L.T("Scorciatoie..."));
         shortcuts.Items.AddRange(Shortcuts);
         shortcuts.SelectedIndex = 0;
-        var ok = new Button { Text = "Seleziona questa cartella", AutoSize = true, DialogResult = DialogResult.OK };
-        var cancel = new Button { Text = "Annulla", AutoSize = true, DialogResult = DialogResult.Cancel };
+        var ok = new Button { Text = L.T("Seleziona questa cartella"), AutoSize = true, DialogResult = DialogResult.OK };
+        var cancel = new Button { Text = L.T("Annulla"), AutoSize = true, DialogResult = DialogResult.Cancel };
 
         var top = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, AutoSize = true };
         top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -92,7 +92,7 @@ internal sealed class RemoteFolderDialog : Form
         var cts = _cts = new CancellationTokenSource();
         path = SyncEngine.NormalizeRemoteRoot(path);
         _path.Text = path;
-        _status.Text = "Lettura...";
+        _status.Text = L.T("Lettura...");
         _list.Items.Clear();
         try
         {
@@ -101,12 +101,12 @@ internal sealed class RemoteFolderDialog : Form
             _list.BeginUpdate();
             foreach (var d in dirs) _list.Items.Add(d);
             _list.EndUpdate();
-            _status.Text = dirs.Count == 0 ? "Nessuna sottocartella (o cartella non accessibile)." : $"{dirs.Count} sottocartelle — doppio clic per entrare.";
+            _status.Text = dirs.Count == 0 ? L.T("Nessuna sottocartella (o cartella non accessibile).") : L.F("{0} sottocartelle — doppio clic per entrare.", dirs.Count);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            if (!cts.IsCancellationRequested) _status.Text = "Errore: " + ex.Message;
+            if (!cts.IsCancellationRequested) _status.Text = L.F("Errore: {0}", ex.Message);
         }
     }
 }
@@ -124,7 +124,7 @@ internal sealed class ExcludesDialog : Form
 
     public ExcludesDialog(IEnumerable<string> patterns)
     {
-        Text = "Esclusioni";
+        Text = L.T("Esclusioni");
         StartPosition = FormStartPosition.CenterParent;
         Size = new Size(LogicalToDeviceUnits(640), LogicalToDeviceUnits(480));
         ShowInTaskbar = false;
@@ -133,18 +133,18 @@ internal sealed class ExcludesDialog : Form
         var help = new Label
         {
             Dock = DockStyle.Fill, AutoSize = true, MaximumSize = new Size(LogicalToDeviceUnits(600), 0),
-            Text = "Un modello per riga. Esempi:\r\n" +
+            Text = L.T("Un modello per riga. Esempi:\r\n" +
                    "  .thumbnails/        → esclude ogni cartella con questo nome\r\n" +
                    "  *.tmp               → esclude i file con questo nome/estensione\r\n" +
                    "  WhatsApp/Media/.Statuses/   → con '/' interno: percorso dalla cartella scelta sul telefono\r\n" +
                    "  ** = qualsiasi sottocartella, * = qualsiasi testo, ? = un carattere. Le righe che iniziano con # sono commenti.\r\n\r\n" +
                    "Predefinite: .thumbnails/ (miniature rigenerate da Android), .trashed-* (cestino), .pending-* (file in scrittura). " +
                    "Le regole valgono dalla cartella scelta sul telefono: scegliendo direttamente /sdcard/Pictures/.thumbnails i file NON sono esclusi. " +
-                   "I file esclusi restano visibili con il filtro \"Esclusi\".",
+                   "I file esclusi restano visibili con il filtro \"Esclusi\"."),
         };
-        var reset = new Button { Text = "Ripristina predefinite", AutoSize = true };
+        var reset = new Button { Text = L.T("Ripristina predefinite"), AutoSize = true };
         var ok = new Button { Text = "OK", AutoSize = true, DialogResult = DialogResult.OK };
-        var cancel = new Button { Text = "Annulla", AutoSize = true, DialogResult = DialogResult.Cancel };
+        var cancel = new Button { Text = L.T("Annulla"), AutoSize = true, DialogResult = DialogResult.Cancel };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
         buttons.Controls.AddRange(new Control[] { cancel, ok, reset });
 
@@ -177,7 +177,7 @@ internal sealed class PostRunDialog : Form
 
     public PostRunDialog(string summary, int toRetry, int dateOnly, DateAlignMode lastMode)
     {
-        Text = "Altre operazioni sull'elenco acquisito";
+        Text = L.T("Altre operazioni sull'elenco acquisito");
         StartPosition = FormStartPosition.CenterParent;
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -187,11 +187,11 @@ internal sealed class PostRunDialog : Form
 
         var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(12), WrapContents = false };
         root.Controls.Add(new Label { Text = summary, AutoSize = true, MaximumSize = new Size(LogicalToDeviceUnits(640), 0), Margin = new Padding(3, 3, 3, 12) });
-        root.Controls.Add(new Label { Text = "L'elenco di telefono e PC è già in memoria: le operazioni seguenti non richiedono una nuova scansione.", AutoSize = true, MaximumSize = new Size(LogicalToDeviceUnits(640), 0), ForeColor = SystemColors.GrayText });
+        root.Controls.Add(new Label { Text = L.T("L'elenco di telefono e PC è già in memoria: le operazioni seguenti non richiedono una nuova scansione."), AutoSize = true, MaximumSize = new Size(LogicalToDeviceUnits(640), 0), ForeColor = SystemColors.GrayText });
 
         if (toRetry > 0)
         {
-            var b = new Button { Text = $"Riprova i {Format.Number(toRetry)} file non copiati", AutoSize = true, Margin = new Padding(3, 12, 3, 3) };
+            var b = new Button { Text = L.F("Riprova i {0} file non copiati", Format.Number(toRetry)), AutoSize = true, Margin = new Padding(3, 12, 3, 3) };
             b.Click += (_, _) => { Result = Choice.RetryFailed; DialogResult = DialogResult.OK; };
             root.Controls.Add(b);
         }
@@ -199,22 +199,22 @@ internal sealed class PostRunDialog : Form
         {
             root.Controls.Add(new Label
             {
-                Text = $"{Format.Number(dateOnly)} file hanno stesso nome e stessa dimensione ma data diversa (copiati in passato senza conservare la data).",
+                Text = L.F("{0} file hanno stesso nome e stessa dimensione ma data diversa (copiati in passato senza conservare la data).", Format.Number(dateOnly)),
                 AutoSize = true, MaximumSize = new Size(LogicalToDeviceUnits(640), 0), Margin = new Padding(3, 12, 3, 3),
             });
             _cmbAlign.Items.AddRange(new object[]
             {
-                "Verifica rapida (primi e ultimi 64 KB; non vede differenze solo a metà file) e allinea le date",
-                "Verifica MD5 completa e allinea le date (più lenta)",
-                "Allinea le date senza verifica (solo nome e dimensione)",
+                L.T("Verifica rapida (primi e ultimi 64 KB; non vede differenze solo a metà file) e allinea le date"),
+                L.T("Verifica MD5 completa e allinea le date (più lenta)"),
+                L.T("Allinea le date senza verifica (solo nome e dimensione)"),
             });
             _cmbAlign.SelectedIndex = lastMode switch { DateAlignMode.Full => 1, DateAlignMode.SizeOnly => 2, _ => 0 };
             root.Controls.Add(_cmbAlign);
-            var b = new Button { Text = "Allinea le date (solo per questa operazione)", AutoSize = true };
+            var b = new Button { Text = L.T("Allinea le date (solo per questa operazione)"), AutoSize = true };
             b.Click += (_, _) => { Result = Choice.AlignDates; DialogResult = DialogResult.OK; };
             root.Controls.Add(b);
         }
-        var close = new Button { Text = "Chiudi", AutoSize = true, DialogResult = DialogResult.Cancel, Margin = new Padding(3, 16, 3, 3) };
+        var close = new Button { Text = L.T("Chiudi"), AutoSize = true, DialogResult = DialogResult.Cancel, Margin = new Padding(3, 16, 3, 3) };
         root.Controls.Add(close);
         CancelButton = close;
         Controls.Add(root);

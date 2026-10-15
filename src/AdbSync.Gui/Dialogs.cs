@@ -132,12 +132,15 @@ internal sealed class ExcludesDialog : Form
 
         var help = new Label
         {
-            Dock = DockStyle.Fill, AutoSize = true, MaximumSize = new Size(600, 0),
+            Dock = DockStyle.Fill, AutoSize = true, MaximumSize = new Size(LogicalToDeviceUnits(600), 0),
             Text = "Un modello per riga. Esempi:\r\n" +
                    "  .thumbnails/        → esclude ogni cartella con questo nome\r\n" +
                    "  *.tmp               → esclude i file con questo nome/estensione\r\n" +
                    "  WhatsApp/Media/.Statuses/   → con '/' interno: percorso dalla cartella scelta sul telefono\r\n" +
-                   "  ** = qualsiasi sottocartella, * = qualsiasi testo, ? = un carattere. Le righe che iniziano con # sono commenti.",
+                   "  ** = qualsiasi sottocartella, * = qualsiasi testo, ? = un carattere. Le righe che iniziano con # sono commenti.\r\n\r\n" +
+                   "Predefinite: .thumbnails/ (miniature rigenerate da Android), .trashed-* (cestino), .pending-* (file in scrittura). " +
+                   "Le regole valgono dalla cartella scelta sul telefono: scegliendo direttamente /sdcard/Pictures/.thumbnails i file NON sono esclusi. " +
+                   "I file esclusi restano visibili con il filtro \"Esclusi\".",
         };
         var reset = new Button { Text = "Ripristina predefinite", AutoSize = true };
         var ok = new Button { Text = "OK", AutoSize = true, DialogResult = DialogResult.OK };

@@ -657,3 +657,94 @@ public class ScaleTests
         GC.KeepAlive(remote); GC.KeepAlive(local); GC.KeepAlive(plan);
     }
 }
+
+public sealed class EngineV013Tests : IDisposable
+{
+    private readonly string _local = Path.Combine(Path.GetTempPath(), "adbsync_v013_" + Guid.NewGuid().ToString("N"));
+    private readonly SyncLogger _log;
+
+    public EngineV013Tests() => _log = new SyncLogger(_local + "_logs");
+
+    public void Dispose()
+    {
+        _log.Dispose();
+        try { Directory.Delete(_local, true); } catch { }
+        try { Directory.Delete(_local + "_logs", true); } catch { }
+    }
+
+    private void PutLocal(string rel, string content)
+    {
+        string p = Path.Combine(_local, rel.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.WriteAllText(p, content);
+    }
+
+    [Fact]
+    public async Task ExcludedFilesAreVisibleWithTheirRuleAndNeverTouched()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("foto.jpg", 1000, 1_700_000_000);
+        d.Add(".thumbnails/a.jpg", 500, 1_700_000_000);
+        PutLocal(".thumbnails/a.jpg", "vecchia miniatura");   // presente su entrambi, ma escluso
+        PutLocal(".thumbnails/b.jpg", "solo sul PC");         // solo sul PC, escluso
+        var opts = new SyncOptions();
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+
+        var excluded = plan.Items.Where(i => i.Category == ItemCategory.Excluded).OrderBy(i => i.RelativePath).ToList();
+        Assert.Equal(2, excluded.Count);
+        Assert.All(excluded, i => Assert.Equal(".thumbnails/", i.ExcludedBy));
+        Assert.All(excluded, i => Assert.Equal(ItemAction.Skip, i.Action));
+        Assert.NotNull(excluded[0].Remote); Assert.NotNull(excluded[0].Local);   // a.jpg: una sola riga per entrambi i lati
+        Assert.Null(excluded[1].Remote);                                         // b.jpg: solo sul PC
+        Assert.Equal(1, plan.ExcludedCount);
+        Assert.Equal(1, plan.ExcludedLocalCount);
+        Assert.Equal(2, plan.RemoteFileCount);
+        Assert.Equal(0, plan.NotCopiable);
+        Assert.DoesNotContain(plan.Items, i => i.Category == ItemCategory.OnlyOnPc);
+
+        var r = await new SyncEngine(d, opts, _log).RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);
+        Assert.Equal(1, r.Copied);
+        Assert.Equal("vecchia miniatura", File.ReadAllText(Path.Combine(_local, ".thumbnails", "a.jpg")));
+    }
+
+    [Fact]
+    public async Task ExclusionRulesApplyRelativeToTheChosenPhoneFolder()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("a.jpg", 500, 1_700_000_000);   // come se la cartella scelta fosse già .../.thumbnails
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, new SyncOptions(), _log, null, default);
+        Assert.Equal(ItemCategory.New, Assert.Single(plan.Items).Category);
+    }
+
+    [Fact]
+    public async Task ConvertedNamesAreListedInATextFile()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("Note: idea?.txt", 100, 1_700_000_000);
+        d.Add("Cartella <1>/foto.jpg", 200, 1_700_000_000);
+        d.Add("normale.jpg", 300, 1_700_000_000);
+        var opts = new SyncOptions();
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var r = await new SyncEngine(d, opts, _log).RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);
+        Assert.NotNull(r.RenamedLogPath);
+        Assert.Equal(3, r.RenamedCount);   // 1 cartella + 2 file (anche quello dentro la cartella convertita)
+        var lines = File.ReadAllLines(r.RenamedLogPath!);
+        Assert.Contains(lines, l => l == "file\tNote: idea?.txt\tNote： idea？.txt\tcopiato");
+        Assert.Contains(lines, l => l == "cartella\tCartella <1>\tCartella ＜1＞\tcreata");
+        Assert.Contains(lines, l => l.StartsWith("file\tCartella <1>/foto.jpg\tCartella ＜1＞\\foto.jpg\t", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("normale.jpg"));
+    }
+
+    [Fact]
+    public async Task NoRenamedFileWhenNothingWasConverted()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("normale.jpg", 300, 1_700_000_000);
+        var opts = new SyncOptions();
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var r = await new SyncEngine(d, opts, _log).RunAsync(plan, default);
+        Assert.Null(r.RenamedLogPath);
+    }
+}

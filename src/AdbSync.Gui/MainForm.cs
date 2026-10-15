@@ -206,6 +206,7 @@ internal sealed class MainForm : Form
                      (ItemCategory.DateOnly, "Solo data diversa", true), (ItemCategory.Collision, "Collisioni", true),
                      (ItemCategory.Blocked, "Non copiabili", true),
                      (ItemCategory.Identical, "Identici", false), (ItemCategory.OnlyOnPc, "Solo sul PC", false),
+                     (ItemCategory.Excluded, "Esclusi", false),
                  })
         {
             var cb = new CheckBox { Text = label, Checked = on, AutoSize = true, Tag = label, ForeColor = CategoryColor(cat) };
@@ -579,6 +580,9 @@ internal sealed class MainForm : Form
                 _lblStatusMsg.Text = $"Attenzione: {Format.Number(plan.NotCopiable)} elementi del telefono NON copiabili (permesso negato / collisioni): vedi scheda Errori.";
                 FillErrors(plan);
             }
+            int excludedAll = plan.ExcludedCount + plan.ExcludedLocalCount;
+            if (excludedAll > 0 && plan.NotCopiable == 0)
+                _lblStatusMsg.Text = $"{Format.Number(excludedAll)} file esclusi dalle regole (es. miniature .thumbnails): non confrontati. Per vederli spunta il filtro \"Esclusi\"; per includerli usa Esclusioni….";
             int dateOnly = plan.Count(ItemCategory.DateOnly);
             if (dateOnly > 50 && !options.CompareMode.Equals(CompareMode.SizeOnly))
                 _log.Warn($"{dateOnly} file hanno stessa dimensione ma data diversa (PC più recente): probabilmente copiati in passato senza conservare la data. Non vengono ricopiati.");
@@ -670,7 +674,8 @@ internal sealed class MainForm : Form
             _btnSync.Enabled = next.HasWork;
         }
 
-        string report = result.ReportPath is not null ? "\n\nReport: " + result.ReportPath : "";
+        string report = (result.ReportPath is not null ? "\n\nReport: " + result.ReportPath : "") +
+                        (result.RenamedLogPath is not null ? $"\nNomi convertiti per Windows ({Format.Number(result.RenamedCount)}): " + result.RenamedLogPath : "");
         int toRetry = _plan?.CountToCopy ?? 0;
         int dateOnly = _plan?.Count(ItemCategory.DateOnly) ?? 0;
         if (_session is null || (toRetry == 0 && dateOnly == 0))
@@ -710,7 +715,7 @@ internal sealed class MainForm : Form
         if (_manualActions.Count == 0) return plan;
         foreach (var i in plan.Items)
         {
-            if (i.Remote is null || i.Category is ItemCategory.Collision or ItemCategory.Blocked) continue;
+            if (i.Remote is null || i.Category is ItemCategory.Collision or ItemCategory.Blocked or ItemCategory.Excluded) continue;
             if (!_manualActions.TryGetValue(i.RelativePath, out var a)) continue;
             // "Copia" forzata vale solo finché il file è ancora diverso (dopo la copia è identico: niente ricopia)
             if (a == ItemAction.Copy && i.Category == ItemCategory.Identical) continue;
@@ -721,7 +726,9 @@ internal sealed class MainForm : Form
 
     private static string CountsText(SyncPlan p) =>
         $"Elenco: telefono {Format.Number(p.RemoteFileCount)} file e {Format.Number(p.RemoteDirCount)} cartelle  ·  " +
-        $"PC {Format.Number(p.LocalFileCount)} file e {Format.Number(p.LocalDirCount)} cartelle  ·  acquisito alle {p.ScannedAt:HH:mm}";
+        $"PC {Format.Number(p.LocalFileCount)} file e {Format.Number(p.LocalDirCount)} cartelle  ·  " +
+        (p.ExcludedCount + p.ExcludedLocalCount > 0 ? $"esclusi {Format.Number(p.ExcludedCount + p.ExcludedLocalCount)}  ·  " : "") +
+        $"acquisito alle {p.ScannedAt:HH:mm}";
 
     /// <summary>Opzione di confronto cambiata: si ricalcola il piano dall'elenco già acquisito, se valido.</summary>
     private async void OptionsChanged()
@@ -857,20 +864,22 @@ internal sealed class MainForm : Form
         var li = new ListViewItem(StatusText(i)) { UseItemStyleForSubItems = true, ForeColor = CategoryColor(i.Category) };
         if (i.Status == ItemStatus.Failed) li.ForeColor = Color.Firebrick;
         else if (i.Status == ItemStatus.Done) li.ForeColor = Color.DarkGreen;
-        li.SubItems.Add(CategoryText(i.Category));
+        li.SubItems.Add(CategoryText(i.Category) + (i.Category == ItemCategory.Excluded && i.Remote is null ? " (solo PC)" : ""));
         li.SubItems.Add(i.RelativePath);
         li.SubItems.Add(i.Remote is null ? "" : Format.Bytes(i.Remote.Size));
         li.SubItems.Add(Format.UnixTime(i.Remote?.MtimeUnix));
         li.SubItems.Add(i.Local is null ? "" : Format.Bytes(i.Local.Size));
         li.SubItems.Add(Format.UnixTime(i.Local?.MtimeUnix));
-        string note = i.Error ?? (i.NameWasSanitized ? "Salvato come: " + i.LocalRelativePath : "");
+        string note = i.Error ?? (i.Category == ItemCategory.Excluded ? "Escluso dalla regola: " + i.ExcludedBy
+            : i.NameWasSanitized ? "Salvato come: " + i.LocalRelativePath : "");
         li.SubItems.Add(note);
         return li;
     }
 
     private static string StatusText(SyncItem i) => i.Action switch
     {
-        ItemAction.Skip => i.Category is ItemCategory.Identical or ItemCategory.OnlyOnPc ? "—" : "Non copiare",
+        ItemAction.Skip => i.Category is ItemCategory.Identical or ItemCategory.OnlyOnPc ? "—"
+            : i.Category == ItemCategory.Excluded ? "Escluso" : "Non copiare",
         ItemAction.FixTimes => i.Status switch
         {
             ItemStatus.Done => "✔ Date allineate",
@@ -909,6 +918,7 @@ internal sealed class MainForm : Form
         ItemCategory.OnlyOnPc => "Solo sul PC",
         ItemCategory.Collision => "Collisione nome",
         ItemCategory.Blocked => "Non copiabile",
+        ItemCategory.Excluded => "Escluso",
         _ => c.ToString(),
     };
 
@@ -922,6 +932,7 @@ internal sealed class MainForm : Form
         ItemCategory.OnlyOnPc => Color.FromArgb(120, 60, 150),
         ItemCategory.Collision => Color.Firebrick,
         ItemCategory.Blocked => Color.Firebrick,
+        ItemCategory.Excluded => Color.FromArgb(110, 110, 130),
         _ => SystemColors.ControlText,
     };
 
@@ -934,7 +945,7 @@ internal sealed class MainForm : Form
         int changed = 0;
         foreach (var i in SelectedItems())
         {
-            if (i.Remote is null || i.Category is ItemCategory.Collision or ItemCategory.Blocked) continue; // non copiabili
+            if (i.Remote is null || i.Category is ItemCategory.Collision or ItemCategory.Blocked or ItemCategory.Excluded) continue; // non copiabili / esclusi dalle regole
             if (i.Action != action) { i.Action = action; changed++; }
             _manualActions[i.RelativePath] = action;
         }

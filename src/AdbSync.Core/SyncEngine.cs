@@ -71,7 +71,9 @@ public sealed class SyncEngine
         if (writeDiagnostics && options.Diagnostic)
             Diagnostics.WriteCompare(log.LogDirectory, session.RemoteRoot, session.LocalRoot, session.Remote, session.Local, plan, log);
         log.Info(DescribePlan(plan));
-        int sanitized = plan.Items.Count(i => i.NameWasSanitized);
+        foreach (var g in plan.Items.Where(i => i.Category == ItemCategory.Excluded).GroupBy(i => i.ExcludedBy).OrderByDescending(g => g.Count()))
+            log.Info($"Esclusi dalla regola \"{g.Key}\": {Format.Number(g.Count())} file (visibili con il filtro Esclusi; si modificano con Esclusioni…).");
+        int sanitized = plan.Items.Count(i => i.NameWasSanitized && i.Category != ItemCategory.Excluded);
         if (sanitized > 0) log.Warn($"{sanitized} nomi contengono caratteri non ammessi da Windows: verranno salvati con caratteri sostitutivi equivalenti.");
         foreach (var c in plan.Items.Where(i => i.Category is ItemCategory.Collision or ItemCategory.Blocked).Take(20))
             log.Warn($"File NON copiabile: {c.RelativePath} — {c.Error}");
@@ -154,7 +156,7 @@ public sealed class SyncEngine
         $"Risultato confronto: {p.Count(ItemCategory.New)} nuovi, {p.Count(ItemCategory.Changed)} modificati, " +
         $"{p.Count(ItemCategory.Conflict)} conflitti, {p.Count(ItemCategory.DateOnly)} solo data diversa, " +
         $"{p.Count(ItemCategory.Identical)} identici, {p.Count(ItemCategory.OnlyOnPc)} solo sul PC, " +
-        $"{p.Count(ItemCategory.Collision)} collisioni, {p.ExcludedCount} esclusi. " +
+        $"{p.Count(ItemCategory.Collision)} collisioni, esclusi dalle regole {p.ExcludedCount} del telefono e {p.ExcludedLocalCount} solo sul PC. " +
         $"Elementi: telefono {Format.Number(p.RemoteFileCount)} file + {Format.Number(p.RemoteDirCount)} cartelle, " +
         $"PC {Format.Number(p.LocalFileCount)} file + {Format.Number(p.LocalDirCount)} cartelle. Da fare: {p.WorkSummary}.";
 
@@ -572,6 +574,7 @@ public sealed class SyncEngine
         Progress.FinishedAt = DateTime.UtcNow;
 
         result.ReportPath = WriteReport(plan, result);
+        (result.RenamedLogPath, result.RenamedCount) = WriteRenamedLog(plan);
         _log.Write(result.FullySucceeded ? LogLevel.Info : LogLevel.Error, result.Summary);
         foreach (var f in result.FailedItems.Take(200)) _log.Error($"  non copiato: {f.RelativePath} — {f.Error}");
         if (result.Stalls > 0)
@@ -581,8 +584,59 @@ public sealed class SyncEngine
             foreach (var p in result.AlwaysStalled.Take(100)) _log.Warn("  sempre bloccato (candidato all'esclusione): " + p);
         }
         if (result.ReportPath is not null) _log.Info("Report dettagliato: " + result.ReportPath);
+        if (result.RenamedLogPath is not null)
+            _log.Info($"Nomi convertiti per Windows: {Format.Number(result.RenamedCount)} — elenco nome originale → nome sul PC: {result.RenamedLogPath}");
         return result;
     }
+
+    /// <summary>
+    /// Elenco testuale dei nomi convertiti (caratteri non ammessi da Windows/exFAT/NTFS): percorso originale sul telefono,
+    /// percorso salvato sul PC ed esito. Scritto a ogni sincronizzazione che ne contiene, anche senza modalità diagnostica.
+    /// </summary>
+    private (string? Path, int Count) WriteRenamedLog(SyncPlan plan)
+    {
+        var dirs = plan.Directories.Where(d => !d.IsRoot && d.RelativePath != d.LocalRelativePath).ToList();
+        var files = plan.Items.Where(i => i.NameWasSanitized && i.Remote is not null).ToList();
+        if (dirs.Count + files.Count == 0 || _log.LogDirectory is null) return (null, 0);
+        try
+        {
+            string path = Path.Combine(_log.LogDirectory, $"nomi_convertiti_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+            using var w = new StreamWriter(path, false, new UTF8Encoding(true));
+            w.WriteLine($"AdbSync — nomi convertiti perché non ammessi su Windows (exFAT/NTFS)");
+            w.WriteLine($"Telefono: {plan.RemoteRoot}");
+            w.WriteLine($"PC:       {plan.LocalRoot}");
+            w.WriteLine("Colonne (separate da TAB): tipo, percorso sul telefono, percorso sul PC, esito");
+            w.WriteLine();
+            foreach (var d in dirs)
+                w.WriteLine(string.Join('\t', "cartella", d.RelativePath, d.LocalRelativePath.Replace('/', '\\'),
+                    d.Error is not null ? "errore: " + d.Error : d.Created ? "creata" : "presente"));
+            foreach (var i in files)
+                w.WriteLine(string.Join('\t', "file", i.RelativePath, i.LocalRelativePath.Replace('/', '\\'), RenamedOutcome(i)));
+            return (path, dirs.Count + files.Count);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Impossibile scrivere l'elenco dei nomi convertiti: " + ex.Message);
+            return (null, 0);
+        }
+    }
+
+    private static string RenamedOutcome(SyncItem i) => i.Status switch
+    {
+        ItemStatus.Done when i.Action == ItemAction.Copy => "copiato",
+        ItemStatus.Done => "già presente, date allineate",
+        ItemStatus.Failed => "NON copiato: " + i.Error,
+        ItemStatus.NotProcessed => "NON copiato: " + i.Error,
+        ItemStatus.ContentDiffers => "contenuto diverso: " + i.Error,
+        _ => i.Category switch
+        {
+            ItemCategory.Identical => "già presente",
+            ItemCategory.Excluded => "escluso dalla regola " + i.ExcludedBy,
+            ItemCategory.Collision or ItemCategory.Blocked => "NON copiabile: " + i.Error,
+            ItemCategory.Conflict or ItemCategory.DateOnly => "presente sul PC, non toccato",
+            _ => i.Action == ItemAction.Skip ? "non copiato (scelta manuale)" : "non elaborato",
+        },
+    };
 
     private string? WriteReport(SyncPlan plan, SyncResult result)
     {

@@ -43,6 +43,7 @@ public sealed class ComparisonSession
                 Items = plan.Items,
                 Directories = plan.Directories,
                 ExcludedCount = plan.ExcludedCount,
+                ExcludedLocalCount = plan.ExcludedLocalCount,
                 StaleTempFiles = Local.StaleTempFiles.ToList(),
                 PermissionDenied = plan.PermissionDenied,
                 RemoteFileCount = plan.RemoteFileCount,

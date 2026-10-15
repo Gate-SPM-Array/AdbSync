@@ -130,6 +130,8 @@ internal static class Program
                         Console.WriteLine($"{(i.Action == ItemAction.FixTimes ? "Date" : i.Action == ItemAction.VerifyAndFixTimes ? "Verifica" : i.Category.ToString()),-9} {Format.Bytes(i.RemoteSize),10}  {i.RelativePath}");
                 }
                 Console.WriteLine("Da fare: " + plan.WorkSummary + ".");
+                if (plan.ExcludedCount + plan.ExcludedLocalCount > 0)
+                    Console.WriteLine($"Esclusi dalle regole: {Format.Number(plan.ExcludedCount)} file del telefono, {Format.Number(plan.ExcludedLocalCount)} solo sul PC (vedi log).");
                 return 0;
             }
 
@@ -152,6 +154,7 @@ internal static class Program
             ClearStatusLine();
             Console.WriteLine();
             Console.WriteLine(result.Summary);
+            if (result.RenamedLogPath is not null) Console.WriteLine($"Nomi convertiti per Windows ({Format.Number(result.RenamedCount)}): {result.RenamedLogPath}");
             if (log.LogFilePath is not null) Console.WriteLine("Log: " + log.LogFilePath);
             return result.FullySucceeded ? 0 : result.AbortReason is not null || result.Cancelled ? 2 : 1;
         }

@@ -58,6 +58,8 @@ public enum ItemCategory
     Collision,
     /// <summary>Non copiabile in sicurezza (es. destinazione dentro un collegamento/junction, nome riservato ai temporanei).</summary>
     Blocked,
+    /// <summary>Escluso da una regola (vedi <see cref="SyncItem.ExcludedBy"/>): non confrontato e mai toccato.</summary>
+    Excluded,
 }
 
 public enum ItemAction
@@ -95,6 +97,8 @@ public sealed class SyncItem
     public ItemCategory Category { get; set; }
     public ItemAction Action { get; set; }
     public bool NameWasSanitized { get; init; }
+    /// <summary>Regola di esclusione che ha scartato l'elemento (stessa istanza di stringa per tutti: nessun costo per file).</summary>
+    public string? ExcludedBy { get; init; }
 
     /// <summary>Motivo della classificazione (per la modalità diagnostica).</summary>
     public string Reason { get; init; } = "";
@@ -142,7 +146,10 @@ public sealed class SyncPlan
     public required string LocalRoot { get; init; }
     public required IReadOnlyList<SyncItem> Items { get; init; }
     public IReadOnlyList<DirItem> Directories { get; init; } = Array.Empty<DirItem>();
+    /// <summary>File del telefono esclusi dalle regole.</summary>
     public int ExcludedCount { get; init; }
+    /// <summary>File presenti solo sul PC che ricadono in una regola di esclusione.</summary>
+    public int ExcludedLocalCount { get; init; }
     public IReadOnlyList<string> StaleTempFiles { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> PermissionDenied { get; init; } = Array.Empty<string>();
     public DateTime CreatedAt { get; } = DateTime.Now;
@@ -212,6 +219,9 @@ public sealed class SyncResult
     public string? AbortReason { get; init; }
     public IReadOnlyList<SyncItem> FailedItems { get; init; } = Array.Empty<SyncItem>();
     public string? ReportPath { get; set; }
+    /// <summary>File di testo con l'associazione nome originale (telefono) → nome salvato sul PC, se ci sono nomi convertiti.</summary>
+    public string? RenamedLogPath { get; set; }
+    public int RenamedCount { get; set; }
 
     /// <summary>Vero solo se TUTTO ciò che c'è sul telefono (salvo scelte esplicite) ora è sul PC.</summary>
     public bool FullySucceeded =>

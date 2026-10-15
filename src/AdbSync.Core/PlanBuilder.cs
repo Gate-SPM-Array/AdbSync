@@ -16,12 +16,26 @@ public static class PlanBuilder
         var filter = new PathFilter(options.ExcludePatterns);
         var items = new List<SyncItem>();
         var claimed = new Dictionary<string, SyncItem>(StringComparer.OrdinalIgnoreCase);
-        int excluded = 0;
+        int excluded = 0, excludedLocal = 0;
+        var excludedLocalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var r in remoteFiles.OrderBy(f => f.RelativePath, StringComparer.Ordinal))
         {
-            if (filter.IsExcluded(r.RelativePath) && !r.RelativePath.EndsWith(LocalScanner.TempSuffix, StringComparison.OrdinalIgnoreCase))
-            { excluded++; continue; }
+            if (!r.RelativePath.EndsWith(LocalScanner.TempSuffix, StringComparison.OrdinalIgnoreCase) && filter.Match(r.RelativePath) is { } rule)
+            {
+                // Escluso: resta visibile (categoria "Esclusi") con la regola responsabile, ma non viene mai toccato.
+                excluded++;
+                var (exRel, exSan) = PathMapper.ToLocalRelative(r.RelativePath);
+                local.Files.TryGetValue(exRel, out var exLocal);
+                if (exLocal is not null) excludedLocalPaths.Add(exRel);
+                items.Add(new SyncItem
+                {
+                    RelativePath = r.RelativePath, LocalRelativePath = exRel, Remote = r, Local = exLocal,
+                    Category = ItemCategory.Excluded, Action = ItemAction.Skip, NameWasSanitized = exSan, ExcludedBy = rule,
+                    Reason = options.Diagnostic ? "escluso dalla regola " + rule : "",
+                });
+                continue;
+            }
 
             var (localRel, sanitized) = PathMapper.ToLocalRelative(r.RelativePath);
             string? blocked = r.RelativePath.EndsWith(LocalScanner.TempSuffix, StringComparison.OrdinalIgnoreCase)
@@ -98,7 +112,18 @@ public static class PlanBuilder
 
         foreach (var lf in local.Files.Values.OrderBy(f => f.RelativePath, StringComparer.Ordinal))
         {
-            if (claimed.ContainsKey(lf.RelativePath) || filter.IsExcluded(lf.RelativePath)) continue;
+            if (claimed.ContainsKey(lf.RelativePath) || excludedLocalPaths.Contains(lf.RelativePath)) continue;
+            if (filter.Match(lf.RelativePath) is { } localRule)
+            {
+                excludedLocal++;
+                items.Add(new SyncItem
+                {
+                    RelativePath = lf.RelativePath, LocalRelativePath = lf.RelativePath, Local = lf,
+                    Category = ItemCategory.Excluded, Action = ItemAction.Skip, ExcludedBy = localRule,
+                    Reason = options.Diagnostic ? "solo sul PC, escluso dalla regola " + localRule : "",
+                });
+                continue;
+            }
             items.Add(new SyncItem
             {
                 RelativePath = lf.RelativePath,
@@ -118,11 +143,12 @@ public static class PlanBuilder
             LocalRoot = localRoot,
             Items = items,
             Directories = dirs,
-            RemoteFileCount = items.Count(i => i.Remote is not null) + excluded,
+            RemoteFileCount = items.Count(i => i.Remote is not null),
             RemoteDirCount = remoteDirs?.Count(d => d.RelativePath.Length > 0) ?? 0,
             LocalFileCount = local.Files.Count,
             LocalDirCount = local.Directories.Count(d => d.Key.Length > 0),
             ExcludedCount = excluded,
+            ExcludedLocalCount = excludedLocal,
             StaleTempFiles = local.StaleTempFiles,
             PermissionDenied = permissionDenied ?? Array.Empty<string>(),
         };

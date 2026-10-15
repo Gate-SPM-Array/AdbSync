@@ -1,180 +1,191 @@
 # AdbSync v0.1.2
 
-Copia **incrementale** dei file da uno smartphone Android al PC, via **ADB** invece che via MTP.
-Confronta le due cartelle come FreeFileSync e copia **solo i file nuovi o modificati**, con verifica, ritentativi automatici e uno stato dettagliato.
+**English** · [Italiano](README.it.md)
 
-Modalità di questa versione: **Aggiorna, telefono → PC**. Copia i file nuovi e quelli modificati e **non cancella mai nulla**, né sul PC né sul telefono.
+**Incremental** copy of files from an Android phone to a Windows PC over **ADB** instead of the slow MTP protocol.
+It compares the two folders the way FreeFileSync does and copies **only new or changed files**, with verification, automatic retries and a detailed live status.
+
+Mode of this version: **Update, phone → PC**. New and changed files are copied; **nothing is ever deleted**, neither on the PC nor on the phone.
+
+> **Language:** the program's user interface is currently in **Italian**. English (and user-editable translation files) is planned for the next version. Button and label names below are given in Italian with the English meaning.
 
 ---
 
-## 1. Preparazione (una volta sola)
+## 1. Setup (once)
 
-1. **Sul telefono**: Impostazioni → Info sul telefono → tocca 7 volte "Numero build" per sbloccare le Opzioni sviluppatore.
-   Poi Impostazioni → Opzioni sviluppatore → attiva **Debug USB**.
-2. Collega il telefono con il cavo USB. Sul telefono compare "Consentire il debug USB?": spunta *Consenti sempre da questo computer* e premi **Consenti**.
-3. **Sul PC**: estrai lo zip in una cartella a tua scelta e avvia `AdbSync.exe`. Se adb non è presente, il programma propone di scaricare le *platform-tools* ufficiali Google (circa 7 MB) nella sottocartella `platform-tools` del programma. In alternativa puoi indicare un `adb.exe` già installato.
+1. **On the phone**: Settings → About phone → tap "Build number" 7 times to unlock Developer options.
+   Then Settings → Developer options → enable **USB debugging**.
+2. Connect the phone with a USB cable. The phone asks "Allow USB debugging?": tick *Always allow from this computer* and tap **Allow**.
+3. **On the PC**: extract the zip into any folder and run `AdbSync.exe`. If adb is not available, the program offers to download Google's official *platform-tools* (about 7 MB) into its `platform-tools` subfolder. You can also point it to an existing `adb.exe`.
 
-**Programma portable**: impostazioni, log, report e platform-tools stanno tutti nella cartella del programma:
+**Portable program**: settings, logs, reports and platform-tools all live in the program folder:
 
 ```
 AdbSync\
-  AdbSync.exe, adbsync-cli.exe, README.md, CHANGELOG.md
+  AdbSync.exe, adbsync-cli.exe, README.md (EN), README.it.md (IT), CHANGELOG.md
   data\settings.json
-  logs\            log, report CSV, cartelle diagnostica_*
-  platform-tools\  adb.exe e DLL (scaricate da Google)
+  logs\            logs, CSV reports, diagnostica_* folders
+  platform-tools\  adb.exe and DLLs (downloaded from Google)
 ```
 
-Se la cartella non è scrivibile (es. `C:\Program Files`) il programma ripiega su `%LOCALAPPDATA%\AdbSync` e lo segnala nel log.
-La chiave di autorizzazione adb resta nella posizione standard di Windows (`%USERPROFILE%\.android`).
-Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *adb… → Arresta il server adb*.
+If the folder is not writable (e.g. `C:\Program Files`) the program falls back to `%LOCALAPPDATA%\AdbSync` and says so in the log.
+The adb authorization key stays in its standard Windows location (`%USERPROFILE%\.android`).
+To move or delete the program folder while adb is running: menu *adb… → Arresta il server adb* (stop the adb server).
 
-> Il pacchetto `AdbSync_v0.1.2_win-x64.zip` richiede il **.NET 10 Desktop Runtime x64**, che si scarica da https://dotnet.microsoft.com/download/dotnet/10.0
+> The `AdbSync_v0.1.2_win-x64.zip` package requires the **.NET 10 Desktop Runtime x64**, available at https://dotnet.microsoft.com/download/dotnet/10.0
 
-## 2. Uso
+## 2. Usage
 
-1. Scegli il **telefono**, la **cartella sul telefono** (es. `/sdcard/DCIM`; *Sfoglia…* naviga le cartelle del telefono) e la **cartella sul PC**.
-2. Premi **① Confronta**. In pochi secondi vedi l'elenco dei file divisi per categoria:
+1. Choose the **phone**, the **phone folder** (e.g. `/sdcard/DCIM`; *Sfoglia…* / Browse navigates the phone's folders) and the **PC folder**.
+2. Press **① Confronta** (Compare). Within seconds you get the file list grouped by category:
 
-   | Categoria | Significato | Azione |
+   | Category (UI label) | Meaning | Action |
    |---|---|---|
-   | Nuovo | esiste solo sul telefono | copiato |
-   | Modificato | il telefono ha una versione più recente | copiato (sovrascrive) |
-   | Conflitto | il PC ha una versione più recente **e diversa** | non toccato, salvo l'opzione *Sovrascrivi i conflitti* |
-   | Solo data diversa | stesso nome e stessa dimensione, data diversa (tipico dopo vecchie copie via MTP) | non toccato, salvo l'opzione *Allinea date stessa dimensione* (vedi sotto) |
-   | Identico | stessa dimensione e data | nessuna |
-   | Solo sul PC | non c'è sul telefono | nessuna (mai cancellato) |
-   | Collisione nome | due file del telefono che su Windows avrebbero lo stesso nome | saltato e segnalato |
+   | New (*Nuovo*) | exists only on the phone | copied |
+   | Changed (*Modificato*) | the phone has a newer version | copied (overwrites) |
+   | Conflict (*Conflitto*) | the PC has a newer **and different** version | left untouched, unless *Overwrite conflicts* is enabled |
+   | Date only (*Solo data diversa*) | same name and size, different date (typical after old MTP copies) | left untouched, unless *Align same-size dates* is enabled (see below) |
+   | Identical (*Identico*) | same size and date | none |
+   | PC only (*Solo sul PC*) | not on the phone | none (never deleted) |
+   | Name collision (*Collisione nome*) | two phone files that would get the same name on Windows | skipped and reported |
 
-   Con il tasto destro sull'elenco puoi escludere o includere singoli file: la scelta resta valida anche quando il piano viene ricalcolato, fino al prossimo Confronta. Il doppio clic apre il file in Esplora risorse.
+   Right-click the list to exclude or include single files: the choice stays valid when the plan is recalculated, until the next Compare. Double-click opens the file in Explorer.
 
-   Sopra l'elenco c'è il riepilogo dei conteggi, **file e cartelle** separati per telefono e PC, da confrontare direttamente con FreeFileSync. FreeFileSync conta le cartelle come elementi.
+   Above the list, a summary shows **file and folder** counts for phone and PC separately, for a direct comparison with FreeFileSync (which counts folders as items).
 
-   **Elenco acquisito, niente nuove scansioni.** Dopo il Confronta l'elenco di telefono e PC resta in memoria. Se cambi un'opzione (confronto, conflitti, esclusioni, allineamento date) il piano si ricalcola dall'elenco in pochi secondi, senza riscansionare. Si riscansiona solo cambiando telefono o cartelle, oppure premendo di nuovo ① Confronta. Con 1.000.000 di file l'elenco occupa circa 400 MB di RAM e il ricalcolo richiede alcuni secondi.
-3. Premi **② Sincronizza**. Il riquadro *Stato* mostra:
-   - la percentuale e i byte copiati sul totale;
-   - la velocità e il tempo stimato rimanente;
-   - i file copiati, gli errori definitivi e quelli in attesa di un nuovo tentativo;
-   - per ogni trasferimento in corso: il file, la percentuale, la velocità e il numero del tentativo;
-   - i messaggi di attesa, ad esempio "Telefono non raggiungibile: in attesa della riconnessione…".
-4. Alla fine compare un **esito esplicito**:
-   - **COMPLETATO** solo se *tutti* i file previsti sono stati copiati e verificati;
-   - altrimenti **TERMINATO CON ERRORI**, **INTERROTTO** o **ANNULLATO**, con l'elenco dei file mancanti e il motivo nella scheda *Errori*.
+   **Acquired list, no rescans.** After Compare, the phone and PC listings stay in memory. Changing an option (compare mode, conflicts, exclusions, date alignment) recalculates the plan from that listing in seconds, without rescanning. A rescan happens only when you change phone or folders, or press ① Compare again. With 1,000,000 files the listing takes about 400 MB of RAM and a recalculation takes a few seconds.
+3. Press **② Sincronizza** (Sync). The *Stato* (Status) panel shows:
+   - percentage and bytes copied out of the total;
+   - speed and estimated time remaining;
+   - files copied, permanent errors and files waiting for another attempt;
+   - for each active transfer: file, percentage, speed and attempt number;
+   - waiting messages, e.g. "phone not reachable: waiting for reconnection…".
+4. At the end you get an **explicit outcome**:
+   - **COMPLETATO** (completed) only if *all* planned files were copied and verified;
+   - otherwise **TERMINATO CON ERRORI** (finished with errors), **INTERROTTO** (aborted) or **ANNULLATO** (cancelled), with the missing files and the reason in the *Errori* (Errors) tab.
 
-   Dopo la copia l'elenco in memoria viene aggiornato con quello che il programma ha scritto, e compare la finestra **"Altre operazioni sull'elenco acquisito"**:
-   - **Riprova i N file non copiati**: riparte subito, senza nuova scansione;
-   - **Allinea le date** dei file "solo data diversa", con il livello di verifica scelto e solo per quella operazione;
-   - **Chiudi**.
+   After the copy, the in-memory listing is updated with what the program wrote, and a **"further operations on the acquired list"** dialog offers:
+   - **retry the N files not copied**: starts right away, no rescan;
+   - **align dates** of "date only" files, with the chosen verification level, for that operation only;
+   - **close**.
 
-   In alternativa, ripeti **Confronta → Sincronizza**: vengono copiati solo i file che mancano.
+   Alternatively, repeat **Compare → Sync**: only the missing files are copied.
 
-## 3. Come lavora (perché è affidabile)
+## 3. How it works (why it is reliable)
 
-- **Scansione veloce e verificata**: un solo comando sul telefono restituisce l'intero albero, file e cartelle, con dimensione e data al nanosecondo. I dati arrivano a blocchi di al massimo 500 percorsi (64 KB), quindi è impossibile superare il limite degli argomenti di Android.
-  - Ogni blocco dichiara quanti elementi contiene, e il programma verifica che il totale ricevuto coincida.
-  - Qualsiasi errore di scansione, o un conteggio che non torna, **ferma il confronto** con un messaggio esplicito: un elenco parziale non diventa mai un piano di copia.
-  - Fanno eccezione i soli "permesso negato", tipici di `Android/data` e `Android/obb`. Vengono elencati nella scheda Errori e il riepilogo finale non dice "COMPLETATO" ma "COMPLETATO CON AVVISI".
-  - Il numero di elementi trovati viene contato in modo indipendente e confrontato con quelli ricevuti. Anche un blocco interrotto sul telefono senza alcun messaggio viene rilevato.
-- **Protezione delle modifiche sul PC**: subito prima di scrivere, il programma verifica che il file sul PC sia ancora com'era al momento del confronto. Se nel frattempo è comparso o è stato modificato, non viene toccato e viene segnalato.
-- **Collegamenti sul PC** (junction/symlink): non vengono attraversati e non vi si scrive dentro, per non uscire mai dalla cartella di destinazione.
-- **Trasferimento**: usa il protocollo *sync* di ADB direttamente, tramite la libreria AdvancedSharpAdbClient. Non lancia un processo `adb.exe` per ogni file.
-- **Copia atomica**: ogni file viene scritto come `nome.adbsync-part`. Diventa il file definitivo solo dopo i controlli:
-  - la dimensione ricevuta corrisponde a quella attesa;
-  - con *Verifica MD5* attiva, l'MD5 calcolato sul telefono coincide con quello calcolato sul PC.
+- **Fast, verified scan**: a single command on the phone returns the whole tree, files and folders, with size and nanosecond date. Data arrives in batches of at most 500 paths (64 KB), so Android's argument-length limit can never be exceeded.
+  - Every batch declares how many entries it contains, and the program checks that the received total matches.
+  - Any scan error, or a count that does not add up, **stops the compare** with an explicit message: a partial listing never becomes a copy plan.
+  - The only exceptions are "permission denied" entries, typical of `Android/data` and `Android/obb`. They are listed in the Errors tab, and the final summary says "COMPLETATO CON AVVISI" (completed with warnings) instead of "COMPLETATO".
+  - The number of entries found is counted independently and compared with those received, so even a batch killed silently on the phone is detected.
+- **PC changes are protected**: right before writing, the program checks that the PC file is still as it was at compare time. If it appeared or changed in the meantime, it is not touched and is reported.
+- **Links on the PC** (junctions/symlinks): never followed and never written into, so writes never leave the destination folder.
+- **Transfer**: uses ADB's *sync* protocol directly through the AdvancedSharpAdbClient library. No `adb.exe` process is spawned per file.
+- **Atomic copy**: each file is written as `name.adbsync-part` and becomes the final file only after the checks:
+  - the received size matches the expected one;
+  - with *MD5 verification* enabled, the MD5 computed on the phone matches the one computed on the PC.
 
-  Poi vengono impostate le date. Un file interrotto a metà non sostituisce mai quello buono.
-- **Date fedeli all'originale**:
-  - file: data di modifica del telefono con la frazione di secondo; la data di creazione viene posta uguale alla data di modifica, perché quella vera del telefono non è leggibile;
-  - cartelle: data di modifica del telefono (e creazione uguale), impostata alla fine della copia;
-  - file identici già presenti sul PC: le date vengono riallineate senza ricopiare il contenuto.
-- **Cartelle vuote**: vengono ricreate, così la struttura è identica a quella del telefono.
-- **Stalli**: se per *Timeout stallo* secondi (minimo 1, predefinito 30) non arriva alcun byte, il trasferimento viene chiuso. Il file **torna in fondo alla coda, senza attese**, e viene ritentato dopo gli altri.
-  - Un timeout basso con molti tentativi di solito rende di più: un file "incastrato" non blocca mai un trasferimento per tanto tempo.
-  - Dopo molti stalli di fila senza alcun file completato (almeno 10, oppure 4 × trasferimenti paralleli), il programma verifica che il telefono risponda. Se il problema continua per 5 controlli di fila, il lavoro si interrompe con un messaggio chiaro invece di girare all'infinito.
-  - Nel riepilogo finale e nel log: numero di stalli, tempo perso, file riusciti dopo più tentativi, file **sempre bloccati** (candidati all'esclusione).
-- **Ritentativi**: fino a *1 + Tentativi extra* volte per file (predefinito 6). Dopo un errore di collegamento si attende in modo crescente (2, 5, 10, 20, 30 s); dopo uno stallo no. Gli errori che non si risolvono ritentando, come un file cancellato dal telefono o un permesso negato, vengono segnalati subito.
-- **Allineamento date dei file "solo data diversa"** (stesso nome, stessa dimensione al byte). Livelli:
-  - *No*: non toccati (predefinito);
-  - *Solo dimensione*: date allineate senza leggere il contenuto;
-  - *Verifica rapida*: MD5 dei primi e degli ultimi 64 KB, calcolato sul telefono e sul PC; esatta per i file fino a 128 KB;
-  - *Verifica MD5 completa*: legge tutto il file, più lenta.
+  Then the dates are set. A file interrupted halfway never replaces the good one.
+- **Faithful dates**:
+  - files: the phone's modification date, including fractions of a second; the creation date is set equal to the modification date, because the phone's real creation date is not readable;
+  - folders: the phone's modification date (and creation set equal), applied at the end of the copy;
+  - identical files already on the PC: dates are realigned without copying the content again.
+- **Empty folders** are recreated, so the structure matches the phone's.
+- **Stalls**: if no byte arrives for *stall timeout* seconds (minimum 1, default 30), the transfer is closed. The file **goes back to the end of the queue, without waiting**, and is retried after the others.
+  - A low timeout with many retries usually performs better: a "stuck" file never blocks a transfer slot for long.
+  - After many consecutive stalls with no file completed (at least 10, or 4 × parallel transfers), the program checks that the phone responds. If the problem persists for 5 checks in a row, the job stops with a clear message instead of looping forever.
+  - The final summary and the log report: number of stalls, time lost, files that succeeded after several attempts, and files that **always stalled** (candidates for exclusion).
+- **Retries**: up to *1 + extra retries* attempts per file (default 6). After a connection error the wait grows (2, 5, 10, 20, 30 s); after a stall there is no wait. Errors that retrying cannot fix, such as a file deleted from the phone or permission denied, are reported immediately.
+- **Date alignment for "date only" files** (same name, byte-identical size). Levels:
+  - *No*: untouched (default);
+  - *Size only*: dates aligned without reading the content;
+  - *Quick check*: MD5 of the first and last 64 KB, computed on phone and PC; exact for files up to 128 KB;
+  - *Full MD5 check*: reads the whole file, slower.
 
-  Sul telefono gli hash si calcolano **a blocchi**: un solo comando ogni 200 file al massimo, non un comando per file. Se il contenuto è diverso, il file non viene toccato, viene segnalato in arancione nella scheda Errori e da quel momento risulta *Conflitto*. Se la verifica non riesce (file illeggibile, telefono che non risponde), le date restano com'erano e il file viene segnalato.
-- **Cavo staccato o telefono bloccato**: la copia si mette in attesa e riprende da sola quando il telefono torna disponibile (attesa massima 5 minuti, poi interruzione pulita).
-- **Disco di destinazione staccato**: la copia va in pausa con il messaggio "Disco di destinazione non disponibile". Riprende da sola se il disco torna con la stessa lettera di unità, altrimenti si interrompe in modo pulito dopo 5 minuti, senza consumare i tentativi dei file.
-- **Spazio su disco**: viene controllato prima di iniziare. Se finisce durante la copia, il lavoro si interrompe con un messaggio chiaro.
-- Il **PC non va in sospensione** durante la copia.
-- I **nomi non validi su Windows** (`: ? * " < > |`, punti o spazi finali, `CON`, `AUX`…) vengono salvati con caratteri equivalenti, ad esempio `：` e `？`. La conversione è stabile, quindi la copia incrementale continua a funzionare.
-- **Esclusioni predefinite**:
-  - `.thumbnails/` (miniature generate da Android);
-  - `.trashed-*` (file nel cestino di Android 11+);
-  - `.pending-*` (file in fase di scrittura);
-  - i propri file temporanei.
+  On the phone, hashes are computed **in batches**: one command per up to 200 files, not one per file. If the content differs, the file is not touched, it is flagged in orange in the Errors tab and from then on shows as *Conflict*. If verification fails (unreadable file, phone not responding), dates stay as they were and the file is reported.
+- **Cable unplugged or phone locked**: the copy waits and resumes by itself when the phone is back (maximum wait 5 minutes, then a clean stop).
+- **Destination disk unplugged**: the copy pauses with the message "destination disk not available". It resumes by itself if the disk returns with the same drive letter; otherwise it stops cleanly after 5 minutes, without using up the files' attempts.
+- **Disk space** is checked before starting. If it runs out during the copy, the job stops with a clear message.
+- The **PC does not go to sleep** during the copy.
+- **Names not valid on Windows** (`: ? * " < > |`, trailing dots or spaces, `CON`, `AUX`…) are saved with equivalent characters, e.g. `：` and `？`. The mapping is stable, so incremental copies keep working.
+- **Default exclusions**:
+  - `.thumbnails/` (thumbnails generated by Android);
+  - `.trashed-*` (files in the Android 11+ trash);
+  - `.pending-*` (files being written);
+  - the program's own temporary files.
 
-  Si modificano con il pulsante *Esclusioni…*.
+  They can be changed with the *Esclusioni…* (Exclusions) button.
 
-Il riquadro *Stato* si ridimensiona trascinando il divisore sopra di esso, e la posizione viene ricordata. L'elenco dei trasferimenti in corso mostra sempre tutti i trasferimenti paralleli.
+The *Stato* (Status) panel can be resized by dragging the splitter above it, and its size is remembered. The active-transfers list always shows all parallel transfers.
 
-## 4. Opzioni
+## 4. Options
 
-| Opzione | Predefinito | Note |
+| Option (UI label) | Default | Notes |
 |---|---|---|
-| Confronta solo la dimensione | no | utile se i file sul PC sono stati copiati in passato senza conservare la data |
-| Ignora differenze di 1 ora | sì | dischi FAT/exFAT e cambio dell'ora legale |
-| Sovrascrivi i conflitti | no | il telefono "vince" anche se il PC è più recente |
-| Verifica MD5 | no | massima garanzia di integrità, ma più lento |
-| Trasferimenti paralleli | 2 | da 2 a 4 aiuta con molti file piccoli (es. WhatsApp) |
-| Timeout stallo | 30 s | minimo 1 s; il file bloccato torna in fondo alla coda |
-| Tentativi extra | 5 | |
-| Allinea date stessa dimensione | No | No / Solo dimensione / Verifica rapida / Verifica MD5 completa |
-| Modalità diagnostica | no | a ogni confronto salva in `logs\diagnostica_<data>\` l'elenco completo telefono, l'elenco PC, il piano con il motivo di ogni decisione e i messaggi grezzi del telefono |
+| Compare size only (*Confronta solo la dimensione*) | no | useful if the PC files were copied in the past without keeping dates |
+| Ignore 1-hour differences (*Ignora differenze di 1 ora*) | yes | FAT/exFAT disks and daylight-saving changes |
+| Overwrite conflicts (*Sovrascrivi i conflitti*) | no | the phone "wins" even if the PC file is newer |
+| MD5 verification (*Verifica MD5*) | no | maximum integrity guarantee, but slower |
+| Parallel transfers (*Trasferimenti paralleli*) | 2 | 2 to 4 helps with many small files (e.g. WhatsApp) |
+| Stall timeout (*Timeout stallo*) | 30 s | minimum 1 s; the stuck file goes back to the end of the queue |
+| Extra retries (*Tentativi extra*) | 5 | |
+| Align same-size dates (*Allinea date stessa dimensione*) | No | No / Size only / Quick check / Full MD5 check |
+| Diagnostic mode (*Modalità diagnostica*) | no | on every compare, saves to `logs\diagnostica_<date>\` the full phone listing, the PC listing, the plan with the reason for every decision, and the raw phone messages |
 
-## 5. Riga di comando
+## 5. Command line
 
-`adbsync-cli.exe` usa lo stesso motore ed è adatta a script e attività pianificate:
+`adbsync-cli.exe` uses the same engine and suits scripts and scheduled tasks:
 
 ```
 adbsync-cli devices
-adbsync-cli compare -r /sdcard/DCIM -l "D:\Backup\Telefono\DCIM" --list
-adbsync-cli sync    -r /sdcard/DCIM -l "D:\Backup\Telefono\DCIM" --yes --verify
-adbsync-cli sync    -r /sdcard -l "D:\Backup\Telefono" --parallel 4 --stall 5 --retries 20 --align-dates quick
+adbsync-cli compare -r /sdcard/DCIM -l "D:\Backup\Phone\DCIM" --list
+adbsync-cli sync    -r /sdcard/DCIM -l "D:\Backup\Phone\DCIM" --yes --verify
+adbsync-cli sync    -r /sdcard -l "D:\Backup\Phone" --parallel 4 --stall 5 --retries 20 --align-dates quick
 adbsync-cli --help
 ```
 
-Codici di uscita: `0` tutto eseguito · `1` errori su alcuni file · `2` interrotto o scansione incompleta · `3` errore di utilizzo. Opzione `--diagnostic` per gli elenchi completi; `--align-dates none|size|quick|full` per l'allineamento delle date.
+Exit codes: `0` everything done · `1` errors on some files · `2` aborted or incomplete scan · `3` usage error. `--diagnostic` writes the full listings; `--align-dates none|size|quick|full` sets date alignment.
 
-## 6. Log e report
+## 6. Logs and reports
 
-- Log completo di ogni sessione: `logs\adbsync_AAAAMMGG_hhmmss.log` nella cartella del programma.
-- Report CSV di ogni sincronizzazione, apribile con Excel: `report_AAAAMMGG_hhmmss.csv`, con l'esito file per file.
-- Impostazioni: `data\settings.json` nella cartella del programma.
-- Modalità diagnostica: `logs\diagnostica_AAAAMMGG_hhmmss\` con `1_telefono.tsv`, `2_pc.tsv`, `3_piano.tsv` e `4_messaggi_telefono.txt`.
+- Full log of every session: `logs\adbsync_YYYYMMDD_hhmmss.log` in the program folder.
+- CSV report of every sync, opens in Excel: `report_YYYYMMDD_hhmmss.csv`, with the outcome of each file.
+- Settings: `data\settings.json` in the program folder.
+- Diagnostic mode: `logs\diagnostica_YYYYMMDD_hhmmss\` with `1_telefono.tsv` (phone), `2_pc.tsv`, `3_piano.tsv` (plan) and `4_messaggi_telefono.txt` (phone messages).
 
-## 7. Limiti noti di questa versione
+## 7. Known limitations of this version
 
-- L'elenco acquisito vive in memoria finché il programma resta aperto: chiudendolo, al riavvio serve un nuovo Confronta.
-- La *Verifica rapida* non vede differenze che stanno solo a metà di un file più grande di 128 KB. Per la massima garanzia usa *Verifica MD5 completa*.
-- I file più piccoli sul PC ma più recenti (per esempio copie MTP interrotte) risultano *Conflitto* e non vengono copiati, salvo l'opzione *Sovrascrivi i conflitti*. Si individuano con il filtro Conflitto.
+- The acquired listing lives in memory while the program is open: after a restart a new Compare is needed.
+- The *Quick check* cannot see differences located only in the middle of a file larger than 128 KB. For maximum assurance use *Full MD5 check*.
+- Files that are smaller but newer on the PC (e.g. interrupted MTP copies) show as *Conflict* and are not copied unless *Overwrite conflicts* is enabled. Use the Conflict filter to find them.
+- Phone → PC direction only, *Update* mode only (no *Mirror*, no deletions).
+- Since Android 11, `Android/data` and `Android/obb` cannot be read over ADB without root: they are reported as warnings in the log.
+- Without *MD5 verification*, corruption that leaves the file size unchanged cannot be detected. This is very rare, because ADB already uses a reliable protocol over USB.
+- With several phones connected, you pick the one to use from the list.
+- The phone's original file creation date is not readable over ADB: it is set equal to the modification date.
+- If the destination disk comes back with a different drive letter, the copy cannot find it: reconnect it with the same letter, or simply redo Compare → Sync with the new path.
 
-- Solo direzione telefono → PC, solo modalità *Aggiorna* (niente *Mirror*, niente cancellazioni).
-- Da Android 11, `Android/data` e `Android/obb` non sono leggibili via ADB senza root: vengono segnalate come avvisi nel log.
-- Senza *Verifica MD5*, una corruzione che lascia invariata la dimensione del file non è rilevabile. È un caso molto raro, perché ADB usa già un protocollo affidabile su USB.
-- Con più telefoni collegati si sceglie quello da usare dall'elenco.
-- La data di creazione originale dei file del telefono non è leggibile via ADB: viene posta uguale alla data di modifica.
-- Se il disco di destinazione torna con una lettera di unità diversa, la copia non lo ritrova: va ricollegato con la stessa lettera, oppure basta rifare Confronta → Sincronizza indicando il nuovo percorso.
-
-## 8. Struttura del codice
+## 8. Code structure
 
 ```
-src/AdbSync.Core   motore: scansione, confronto, copia robusta (multipiattaforma)
-src/AdbSync.Gui    interfaccia Windows Forms
-src/AdbSync.Cli    riga di comando
-tests/             79 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
+src/AdbSync.Core   engine: scan, compare, robust copy (cross-platform)
+src/AdbSync.Gui    Windows Forms user interface
+src/AdbSync.Cli    command line
+tests/             79 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
 ```
 
-Compilazione: .NET 10 SDK → `dotnet build`. Test: `dotnet test`.
+Build: .NET 10 SDK → `dotnet build`. Tests: `dotnet test`.
 
-Pubblicazione:
+Publish:
 
 ```
 dotnet publish src/AdbSync.Gui -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
 ```
+
+## 9. License and credits
+
+Released under the [MIT](LICENSE) license. Third-party components: see [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
+
+Developed by [Gate-SPM-Array](https://github.com/Gate-SPM-Array) with [Claude](https://claude.com) (Anthropic), which wrote the code based on the maintainer's requirements, design decisions and testing on real phones.
+
+AdbSync is an independent project, not affiliated with FreeFileSync or AdbFileManager: the former is the functional reference for the compare logic, the latter inspired the use of ADB instead of MTP.

@@ -29,5 +29,5 @@ Release packages are named with the version: `AdbSync_vX.Y.Z_win-x64.zip`.
 
 ## Conventions
 - User-facing text is currently Italian (localization with external `lang/*.json` files is planned). Code identifiers and comments: English or Italian as in the surrounding file.
-- Bump `<Version>` in all three csproj files and `AppVersion` in `MainForm.cs` / CLI `Program.cs` together; update `CHANGELOG.md` and `README.md`.
+- Bump `<Version>` in all three csproj files and `AppVersion` in `MainForm.cs` / CLI `Program.cs` together; update `CHANGELOG.md` and both READMEs (`README.md` English, default on GitHub; `README.it.md` Italian) keeping them in sync.
 - Scale target: about 1,000,000 files per phone; keep per-file memory low (no per-file strings that are not needed).

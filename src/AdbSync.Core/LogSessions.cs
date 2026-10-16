@@ -107,6 +107,39 @@ public static class LogSessions
 
     public static bool IsSessionFolder(string name) => SessionName.IsMatch(name);
 
+    /// <summary>
+    /// Zip da allegare a una segnalazione: il log della sessione indicata e il SystemLOG del mese (e del precedente).
+    /// Niente report CSV né diagnostica: contengono l'elenco completo dei file. Restituisce il percorso dello zip.
+    /// </summary>
+    public static string CreateSupportZip(string logRoot, string? sessionDirectory, DateTime now)
+    {
+        string zipPath = Path.Combine(logRoot, $"segnalazione_{now:yyyyMMdd_HHmmss}.zip");
+        var files = new List<(string Source, string Entry)>();
+        if (sessionDirectory is not null)
+        {
+            string s = Path.Combine(sessionDirectory, SyncLogger.SessionLogFileName);
+            // nome generico: la cartella della sessione contiene il nome dato al telefono
+            if (File.Exists(s)) files.Add((s, "sessione/" + SyncLogger.SessionLogFileName));
+        }
+        foreach (var month in new[] { now.AddMonths(-1), now })
+        {
+            string name = $"system_{month:yyyy-MM}.log";
+            string p = Path.Combine(logRoot, SyncLogger.SystemFolderName, name);
+            if (File.Exists(p)) files.Add((p, SyncLogger.SystemFolderName + "/" + name));
+        }
+        Directory.CreateDirectory(logRoot);
+        using var zip = System.IO.Compression.ZipFile.Open(zipPath, System.IO.Compression.ZipArchiveMode.Create);
+        foreach (var (source, entryName) in files)
+        {
+            // i log possono essere aperti in scrittura proprio ora
+            using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var entry = zip.CreateEntry(entryName, System.IO.Compression.CompressionLevel.Optimal);
+            using var output = entry.Open();
+            input.CopyTo(output);
+        }
+        return zipPath;
+    }
+
     /// <summary>Numero di sessioni, dimensione totale della cartella log e file delle versioni precedenti (prima della 0.1.7).</summary>
     public static LogFolderStats Inspect(string logRoot)
     {
@@ -119,7 +152,7 @@ public static class LogSessions
         try
         {
             sessions = root.EnumerateDirectories().Count(d => IsSessionFolder(d.Name));
-            older = root.EnumerateFiles().Count() + root.EnumerateDirectories("diagnostica_*").Count();
+            older = root.EnumerateFiles().Count(f => !f.Name.StartsWith("segnalazione_", StringComparison.OrdinalIgnoreCase)) + root.EnumerateDirectories("diagnostica_*").Count();
         }
         catch { }
         return new LogFolderStats(sessions, bytes, older);

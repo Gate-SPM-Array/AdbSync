@@ -11,7 +11,8 @@ public static class PlanBuilder
         SyncOptions options,
         IEnumerable<RemoteDir>? remoteDirs = null,
         IReadOnlyList<string>? permissionDenied = null,
-        IReadOnlySet<string>? knownDifferent = null)
+        IReadOnlySet<string>? knownDifferent = null,
+        IReadOnlySet<string>? unreadable = null)
     {
         var filter = new PathFilter(options.ExcludePatterns);
         var items = new List<SyncItem>();
@@ -42,7 +43,9 @@ public static class PlanBuilder
                 ? L.F("il nome termina con \"{0}\", riservato ai file temporanei del programma", LocalScanner.TempSuffix)
                 : UnderReparse(localRel, local.ReparseDirectories) is { } rp
                     ? L.F("sul PC la cartella \"{0}\" è un collegamento (junction/symlink): non si scrive fuori dalla destinazione", rp)
-                    : null;
+                    : unreadable?.Contains(r.RelativePath) == true
+                        ? L.T("Android non permette di leggere questo file (permesso negato, visto durante la copia)")
+                        : null;
             if (blocked is not null)
             {
                 items.Add(new SyncItem
@@ -85,9 +88,10 @@ public static class PlanBuilder
                 _ => ItemAction.Skip,
             };
             bool knownDiff = false;
-            if (category == ItemCategory.DateOnly && knownDifferent?.Contains(localRel) == true)
+            if (category is ItemCategory.DateOnly or ItemCategory.Identical && knownDifferent?.Contains(localRel) == true)
             {
-                // già verificato in questa sessione: il contenuto è diverso → non si ritocca e non si riverifica
+                // già verificato in questa sessione (allineamento date o verifica del backup): il contenuto è diverso
+                // → non si ritocca e non si riverifica; si ricopia solo per scelta esplicita
                 category = ItemCategory.Conflict;
                 action = options.OverwriteConflicts ? ItemAction.Copy : ItemAction.Skip;
                 reason = L.F("stessa dimensione ma contenuto diverso (verificato): {0}", reason);

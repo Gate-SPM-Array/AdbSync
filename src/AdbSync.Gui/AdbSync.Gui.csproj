@@ -12,7 +12,7 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
     <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
-    <Version>0.1.7</Version>
+    <Version>0.1.8</Version>
     <Product>AdbSync</Product>
     <Company>DGR – ICT GRC Consulting</Company>
     <Description>Copia incrementale Android → PC via ADB</Description>

@@ -1,4 +1,4 @@
-# AdbSync v0.1.7
+# AdbSync v0.1.8
 
 **English** · [Italiano](README.it.md)
 
@@ -34,7 +34,7 @@ If the folder is not writable (e.g. `C:\Program Files`) the program falls back t
 The adb authorization key stays in its standard Windows location (`%USERPROFILE%\.android`).
 To move or delete the program folder while adb is running: menu *adb… → Arresta il server adb* (stop the adb server).
 
-> The `AdbSync_v0.1.7_win-x64.zip` package requires the **.NET 10 Desktop Runtime x64**, available at https://dotnet.microsoft.com/download/dotnet/10.0
+> The `AdbSync_v0.1.8_win-x64.zip` package requires the **.NET 10 Desktop Runtime x64**, available at https://dotnet.microsoft.com/download/dotnet/10.0
 
 ## 2. Usage
 
@@ -70,7 +70,10 @@ To move or delete the program folder while adb is running: menu *adb… → Arre
    After the copy, the in-memory listing is updated with what the program wrote, and a **"further operations on the acquired list"** dialog offers:
    - **retry the N files not copied**: starts right away, no rescan;
    - **align dates** of "date only" files, with the chosen verification level, for that operation only;
+   - **verify the backup** (see below);
    - **close**.
+
+   **Verify the backup** (also in *Strumenti → Verifica il backup*; CLI `adbsync-cli verify`): for every file present on both sides with the same name, size and date, the hash computed on the phone is compared with the PC one, using the acquired listing (no new scan). *Quick* reads the first and last 64 KB of each file; *Full* computes the MD5 of the whole file. Nothing is modified: files that differ are listed in the Errors tab and in `verifica_backup_<date>.csv` (with both hashes), and are copied again from the phone only if you confirm. The result also says whether the backup is complete: phone files missing on the PC (or with a different size or date) are counted, because they cannot be verified. A passed *quick* check only says that start and end of each file match.
 
    Alternatively, repeat **Compare → Sync**: only the missing files are copied.
 
@@ -80,6 +83,7 @@ To move or delete the program folder while adb is running: menu *adb… → Arre
   - Every batch declares how many entries it contains, and the program checks that the received total matches.
   - Any scan error, or a count that does not add up, **stops the compare** with an explicit message: a partial listing never becomes a copy plan.
   - The only exceptions are "permission denied" entries, typical of `Android/data` and `Android/obb`. They are listed in the Errors tab, and the final summary says "COMPLETATO CON AVVISI" (completed with warnings) instead of "COMPLETATO".
+  - The same applies to files that are listed but that Android does not allow to read during the copy: they are counted as *not copiable* (not as errors), are not retried, and *Retry* does not propose them again while the program stays open.
   - The number of entries found is counted independently and compared with those received, so even a batch killed silently on the phone is detected.
 - **PC changes are protected**: right before writing, the program checks that the PC file is still as it was at compare time. If it appeared or changed in the meantime, it is not touched and is reported.
 - **Links on the PC** (junctions/symlinks): never followed and never written into, so writes never leave the destination folder.
@@ -135,7 +139,7 @@ The *Stato* (Status) panel can be resized by dragging the splitter above it, and
 | Compare size only (*Confronta solo la dimensione*) | no | useful if the PC files were copied in the past without keeping dates |
 | Ignore 1-hour differences (*Ignora differenze di 1 ora*) | yes | FAT/exFAT disks and daylight-saving changes |
 | Overwrite conflicts (*Sovrascrivi i conflitti*) | no | the phone "wins" even if the PC file is newer |
-| MD5 verification (*Verifica MD5*) | no | maximum integrity guarantee, but slower |
+| MD5 verification (*Verifica MD5*) | no | maximum integrity guarantee, but slower. The summary says on how many copied files the MD5 matched, and the CSV report has an MD5 column; without it, the summary says that only the size was checked |
 | Parallel transfers (*Trasferimenti paralleli*) | 2 | 2 to 4 helps with many small files (e.g. WhatsApp) |
 | Phone stall timeout (*Timeout stallo telefono*) | 30 s | minimum 1 s; the stuck file goes back to the end of the queue |
 | PC disk write timeout (*Strumenti* menu) | 120 s | minimum 30 s; a disk write slower than this closes the transfer and requeues the file |
@@ -152,17 +156,18 @@ adbsync-cli devices
 adbsync-cli compare -r /sdcard/DCIM -l "D:\Backup\Phone\DCIM" --list
 adbsync-cli sync    -r /sdcard/DCIM -l "D:\Backup\Phone\DCIM" --yes --verify
 adbsync-cli sync    -r /sdcard -l "D:\Backup\Phone" --parallel 4 --stall 5 --retries 20 --align-dates quick
+adbsync-cli verify  -r /sdcard/DCIM -l "D:\Backup\Phone\DCIM" --quick
 adbsync-cli --help
 ```
 
-Exit codes: `0` everything done · `1` errors on some files · `2` aborted or incomplete scan · `3` usage error. `--diagnostic` writes the full listings; `--align-dates none|size|quick|full` sets date alignment.
+Exit codes: `0` everything done · `1` errors on some files (or, for `verify`, files different from the phone or missing on the PC) · `2` aborted or incomplete scan · `3` usage error. `--diagnostic` writes the full listings; `--align-dates none|size|quick|full` sets date alignment.
 
 ## 6. Logs and reports
 
 - **One folder per session.** A session starts when the program is open and a phone is connected, and lasts while the program stays open with the same phone (a disconnection during the copy does not start a new one). Every `adbsync-cli` run is a session too.
   ```
   logs\
-    2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-David\
+    2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-Mario\
       sessione.log                     everything that happened in the session
       report_YYYYMMDD_hhmmss.csv       one per sync, opens in Excel, outcome of each file
       nomi_convertiti_YYYYMMDD_hhmmss.txt
@@ -172,6 +177,7 @@ Exit codes: `0` everything done · `1` errors on some files · `2` aborted or in
   ```
   The folder name is date and time (so the folders sort chronologically), manufacturer and model, and the name given to the phone in Android settings (or its Bluetooth name). Characters not valid on Windows become `-`. The serial number is never used, except its last 4 characters when two phones of the same model are connected.
 - **SystemLOG**: what is not part of a copy session — program start and close (version, Windows, .NET, language, migrations), adb (path, server, errors, unauthorized phone), phones detected and disconnected, which session folder was opened, unexpected errors and crashes, also before the window appears. The GUI and the command line can write to it at the same time; each line says which one (`[GUI]`, `[CLI]`).
+- **Logs for an issue report**: *Aiuto → Prepara log per segnalazione* creates `logs\segnalazione_<date>.zip` with the current session log and the SystemLOG, without reports or file lists. Logs never contain the full serial number of the phone (only its last 4 characters), but they do contain names and paths of your files: check the zip before attaching it to a public issue.
 - **Nothing is deleted automatically.** At startup the program shows how many sessions the log folder holds and its total size (status panel and SystemLOG); delete old sessions yourself when you want. Menu *File*: *Apri cartella log e report* (log folder) and *Apri cartella della sessione corrente* (current session).
 - Logs of versions before 0.1.7 stay where they are (directly in `logs\`).
 - Settings: `data\settings.json` in the program folder.
@@ -183,7 +189,7 @@ Exit codes: `0` everything done · `1` errors on some files · `2` aborted or in
 - The *Quick check* cannot see differences located only in the middle of a file larger than 128 KB. For maximum assurance use *Full MD5 check*.
 - Files that are smaller but newer on the PC (e.g. interrupted MTP copies) show as *Conflict* and are not copied unless *Overwrite conflicts* is enabled. Use the Conflict filter to find them.
 - Phone → PC direction only, *Update* mode only (no *Mirror*, no deletions).
-- Since Android 11, `Android/data` and `Android/obb` cannot be read over ADB without root: they are reported as warnings in the log.
+- Since Android 11, `Android/data` and `Android/obb` cannot be read over ADB without root: they are reported as warnings (not copiable), not as errors.
 - Without *MD5 verification*, corruption that leaves the file size unchanged cannot be detected. This is very rare, because ADB already uses a reliable protocol over USB.
 - With several phones connected, you pick the one to use from the list.
 - English plurals are not handled ("1 files").
@@ -197,7 +203,7 @@ src/AdbSync.Core   engine: scan, compare, robust copy (cross-platform)
 src/AdbSync.Gui    Windows Forms user interface
 src/AdbSync.Cli    command line
 lang/              translation files (en.json = reference)
-tests/             126 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
+tests/             139 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
 ```
 
 Build: .NET 10 SDK → `dotnet build`. Tests: `dotnet test`.

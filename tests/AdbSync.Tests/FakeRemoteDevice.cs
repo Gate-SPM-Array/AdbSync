@@ -21,7 +21,7 @@ public sealed class FakeRemoteDevice : IRemoteDevice
     public int ChunkSize = 4096;
     public TimeSpan ChunkDelay = TimeSpan.Zero;
 
-    public enum Fault { Stall, HangIgnoringCancel, TransientError, NoSuchFile, Truncate, Corrupt, GoOffline, Pause, StallAfterHalf }
+    public enum Fault { Stall, HangIgnoringCancel, TransientError, NoSuchFile, Truncate, Corrupt, GoOffline, Pause, StallAfterHalf, PermissionDenied }
     /// <summary>Durata della pausa simulata (Fault.Pause): il flusso si ferma a metà file e poi riprende.</summary>
     public TimeSpan PauseDuration = TimeSpan.FromMilliseconds(800);
 
@@ -161,6 +161,8 @@ public sealed class FakeRemoteDevice : IRemoteDevice
             {
                 case Fault.NoSuchFile:
                     throw new Exception($"Failed to pull '{remotePath}'. No such file or directory");
+                case Fault.PermissionDenied:
+                    throw new Exception($"Failed to pull '{remotePath}'. Permission denied");
                 case Fault.TransientError:
                     throw new IOException("connessione reimpostata");
                 case Fault.GoOffline:

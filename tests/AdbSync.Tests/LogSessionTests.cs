@@ -18,9 +18,9 @@ public sealed class LogSessionTests : IDisposable
     [Fact]
     public void FolderNameHasDateModelAndPhoneNameButNoSerial()
     {
-        var id = new DeviceIdentity("Xiaomi", "2201117TG", "Telefono di David", "14");
-        Assert.Equal("2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-David", LogSessions.FolderName(Start, id));
-        Assert.Equal("2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-David_cdef",
+        var id = new DeviceIdentity("Xiaomi", "2201117TG", "Telefono di Mario", "14");
+        Assert.Equal("2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-Mario", LogSessions.FolderName(Start, id));
+        Assert.Equal("2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-Mario_cdef",
             LogSessions.FolderName(Start, id, LogSessions.SerialSuffix("ab12-cdef")));
     }
 
@@ -63,7 +63,7 @@ public sealed class LogSessionTests : IDisposable
         // getprop e settings non esistono fuori da Android: funzioni finte con lo stesso comportamento
         string script = """
             getprop() { case "$1" in ro.product.manufacturer) printf 'Xiaomi\n';; ro.product.model) printf '2201117TG\n';; ro.build.version.release) printf '14\n';; esac; }
-            settings() { case "$3" in device_name) printf 'Telefono di David\n';; *) printf 'null\n';; esac; }
+            settings() { case "$3" in device_name) printf 'Telefono di Mario\n';; *) printf 'null\n';; esac; }
             """ + "\n" + DeviceIdentity.Command;
         var psi = new ProcessStartInfo("/usr/bin/mksh") { RedirectStandardOutput = true };
         psi.ArgumentList.Add("-c");
@@ -71,7 +71,7 @@ public sealed class LogSessionTests : IDisposable
         using var p = Process.Start(psi)!;
         string output = p.StandardOutput.ReadToEnd();
         p.WaitForExit();
-        Assert.Equal(new DeviceIdentity("Xiaomi", "2201117TG", "Telefono di David", "14"), DeviceIdentity.Parse(output, "x"));
+        Assert.Equal(new DeviceIdentity("Xiaomi", "2201117TG", "Telefono di Mario", "14"), DeviceIdentity.Parse(output, "x"));
     }
 
     [Fact]

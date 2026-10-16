@@ -8,7 +8,7 @@ namespace AdbSync.Gui;
 
 internal sealed class MainForm : Form
 {
-    private static readonly string AppVersion = "0.1.7";
+    private static readonly string AppVersion = "0.1.8";
 
     // --- stato ---
     private readonly IReadOnlyList<string> _migration = Program.MigrationMessages; // eseguita in Program.Main, prima di tutto
@@ -322,6 +322,8 @@ internal sealed class MainForm : Form
         var tools = _menuTools;
         tools.Text = L.T("&Strumenti");
         tools.DropDownItems.Add(L.T("Esclusioni..."), null, (_, _) => { if (!_busy) _btnExcludes.PerformClick(); });
+        tools.DropDownItems.Add(L.T("Verifica il backup (hash telefono ↔ PC)..."), null, async (_, _) => await VerifyBackupAsync());
+        tools.DropDownItems.Add(new ToolStripSeparator());
         var v2 = new ToolStripMenuItem(L.T("Protocollo di trasferimento ADB v2 (come adb pull)")) { CheckOnClick = true, Checked = _settings.SyncV2 };
         v2.ToolTipText = L.T("Prova: usa la stessa versione del protocollo di \"adb pull\". Se il telefono non la supporta si torna da soli alla v1.");
         v2.CheckedChanged += (_, _) => { _settings.SyncV2 = v2.Checked; _settings.Save(); _log.Info(L.F("Protocollo di trasferimento ADB impostato: {0}", v2.Checked ? "v2" : "v1")); };
@@ -366,10 +368,32 @@ internal sealed class MainForm : Form
         AddLink(help, L.T("Pagina del progetto su GitHub"), "project");
         AddLink(help, L.T("Segnala un problema o chiedi una funzione"), "issues");
         AddLink(help, L.T("Versioni e aggiornamenti"), "releases");
+        help.DropDownItems.Add(L.T("Prepara log per segnalazione..."), null, (_, _) => PrepareSupportZip());
         help.DropDownItems.Add(new ToolStripSeparator());
         help.DropDownItems.Add(L.T("Informazioni su AdbSync"), null, (_, _) => ShowAbout());
 
         _menu.Items.AddRange(new ToolStripItem[] { file, tools, lang, help });
+    }
+
+    /// <summary>Zip con il log della sessione e il SystemLOG, da allegare a una segnalazione.</summary>
+    private void PrepareSupportZip()
+    {
+        if (MessageBox.Show(this,
+                L.T("Lo zip conterrà il log della sessione corrente e il log di sistema (SystemLOG), senza report né elenchi dei file.\n\n" +
+                    "Attenzione: i log riportano il nome del telefono, i percorsi sul PC (che possono contenere il tuo nome utente di Windows) e i nomi dei tuoi file. " +
+                    "Controlla lo zip prima di allegarlo a una segnalazione pubblica.\n\nCreare lo zip?"),
+                L.T("Prepara log per segnalazione"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK)
+            return;
+        try
+        {
+            string zip = LogSessions.CreateSupportZip(SyncLogger.DefaultLogDirectory, _log.LogDirectory, DateTime.Now);
+            _log.System(LogLevel.Info, L.F("Zip per la segnalazione creato: {0}", zip));
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{zip}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, L.F("Zip non creato: {0}", ex.Message), "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private string DiskStallMenuText() => L.F("Timeout scrittura su disco (PC): {0} s...", _settings.DiskStallSeconds);
@@ -658,7 +682,8 @@ internal sealed class MainForm : Form
     /// <summary>Nel SystemLOG: telefoni comparsi, scollegati o con stato cambiato (senza numero di serie).</summary>
     private void LogDeviceChanges(IReadOnlyList<DeviceInfo> devices)
     {
-        var now = devices.ToDictionary(d => d.Serial, d => (d.Model, d.StateLabel));
+        var now = new Dictionary<string, (string Model, string State)>();
+        foreach (var d in devices) now[d.Serial] = (d.Model, d.StateLabel);   // adb può elencare due telefoni con lo stesso seriale
         foreach (var d in devices)
         {
             if (_knownDevices.TryGetValue(d.Serial, out var old) && old.State == d.StateLabel) continue;
@@ -684,7 +709,7 @@ internal sealed class MainForm : Form
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             var env = _env ?? throw new InvalidOperationException(L.T("adb non avviato"));
-            id = await Task.Run(() => env.OpenDevice(d.Serial, d.ToString()).GetIdentityAsync(d.Model, cts.Token));
+            id = await Task.Run(() => env.OpenDevice(d.Serial, d.LogName).GetIdentityAsync(d.Model, cts.Token));
         }
         catch (Exception ex)
         {
@@ -726,7 +751,7 @@ internal sealed class MainForm : Form
             if (showErrors) MessageBox.Show(this, L.F("{0}: {1}.\n\nDopo aver risolto premi Aggiorna.", d.Model, d.StateLabel), "AdbSync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return null;
         }
-        return _env.OpenDevice(d.Serial, d.ToString());
+        return _env.OpenDevice(d.Serial, d.LogName);
     }
 
     private void BrowseRemote()
@@ -757,6 +782,7 @@ internal sealed class MainForm : Form
         var dev = GetSelectedDevice(true);
         if (dev is null) return;
         if (_cmbDevice.SelectedItem is DeviceInfo info) await EnsureLogSessionAsync(info);
+        if (_busy) return;   // durante l'attesa può essere partita un'altra operazione
         string remote = _txtRemote.Text.Trim();
         string local = _txtLocal.Text.Trim();
         if (remote.Length == 0) { MessageBox.Show(this, L.T("Indica la cartella sul telefono."), "AdbSync"); return; }
@@ -829,6 +855,7 @@ internal sealed class MainForm : Form
         var dev = GetSelectedDevice(true);
         if (dev is null) return;
         if (_cmbDevice.SelectedItem is DeviceInfo info) await EnsureLogSessionAsync(info);
+        if (_busy) return;
 
         var age = DateTime.Now - plan.ScannedAt;
         string ageNote = age.TotalMinutes > 60
@@ -891,7 +918,7 @@ internal sealed class MainForm : Form
                         (result.RenamedLogPath is not null ? "\n" + L.F("Nomi convertiti per Windows ({0}): {1}", Format.Number(result.RenamedCount), result.RenamedLogPath) : "");
         int toRetry = _plan?.CountToCopy ?? 0;
         int dateOnly = _plan?.Count(ItemCategory.DateOnly) ?? 0;
-        if (_session is null || (toRetry == 0 && dateOnly == 0))
+        if (_session is null)
         {
             MessageBox.Show(this, result.Summary + report, "AdbSync",
                 MessageBoxButtons.OK, result.FullySucceeded ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
@@ -899,6 +926,11 @@ internal sealed class MainForm : Form
         }
         using var dlg = new PostRunDialog(result.Summary + report, toRetry, dateOnly, _settings.AlignSameSizeDates);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        if (dlg.Result == PostRunDialog.Choice.VerifyBackup)
+        {
+            await VerifyBackupAsync();
+            return;
+        }
         if (dlg.Result == PostRunDialog.Choice.AlignDates)
         {
             // Solo per questa operazione: l'opzione nella finestra principale non cambia.
@@ -920,6 +952,95 @@ internal sealed class MainForm : Form
             return;
         }
         await SyncAsync(confirm: false);
+    }
+
+    /// <summary>
+    /// Verifica del backup sull'elenco acquisito: confronta gli hash di tutti i file presenti su telefono e PC.
+    /// Non modifica nulla; i file diversi si ricopiano solo dopo conferma esplicita.
+    /// </summary>
+    private async Task VerifyBackupAsync()
+    {
+        if (_busy) return;
+        if (_session is null) { await CompareAsync(); if (_session is null) return; }
+        var dev = GetSelectedDevice(true);
+        if (dev is null) return;
+        if (_cmbDevice.SelectedItem is DeviceInfo info) await EnsureLogSessionAsync(info);
+        if (_busy || _session is null) return;
+        var session = _session;
+        var options = CurrentOptions();
+        SyncPlan plan;
+        SetBusy(true, L.T("Preparazione della verifica dall'elenco acquisito..."));
+        try
+        {
+            // le scelte manuali ("Non copiare") restano: il piano mostrato è anche quello che userà Sincronizza
+            plan = WithManualActions(await Task.Run(() => SyncEngine.PlanFromSession(session, options, _log, writeDiagnostics: false)));
+        }
+        finally { SetBusy(false, null); }
+        var candidates = plan.Items.Where(i => i.Category == ItemCategory.Identical && i.Remote is not null && i.Local is not null).ToList();
+        bool quick;
+        using (var dlg = new VerifyDialog(candidates.Count, candidates.Sum(i => i.RemoteSize)))
+        {
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            quick = dlg.Quick;
+        }
+
+        _plan = plan;
+        UpdateFilterCounts();
+        RefreshView();
+        _cts = new CancellationTokenSource();
+        ResetStatusPanel();
+        var engine = _engine = new SyncEngine(dev, options, _log);
+        var token = _cts.Token;
+        SetBusy(true, L.T("Verifica del backup in corso..."));
+        KeepAwake(true);
+        VerifyResult? result = null;
+        try
+        {
+            result = await Task.Run(() => engine.VerifyBackupAsync(plan, quick, token));
+        }
+        catch (Exception ex)
+        {
+            _log.Error(L.F("Errore imprevisto: {0}", ex));
+            MessageBox.Show(this, ex.Message, L.T("Errore"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            KeepAwake(false);
+            UiTick();
+            _engine = null;
+            SetBusy(false, null);
+        }
+        if (result is null) return;
+        _lastVerifyQuick = quick;
+        bool ok = result.Complete;
+        _lblPhase.Text = (ok ? "✔ " : "✖ ") + result.Summary;
+        _lblPhase.ForeColor = ok ? Color.DarkGreen : Color.Firebrick;
+        FillErrors(plan);
+        _lvFiles.Invalidate();
+        _btnSync.Enabled = plan.HasWork;
+        session.ApplyResults(plan); // i file diversi restano segnalati come tali nei piani successivi
+        if (!ok && _lvErrors.Items.Count > 0) _tabs.SelectedTab = _tabErrors;
+
+        string report = result.ReportPath is not null ? "\n\n" + L.F("Report: {0}", result.ReportPath) : "";
+        if (result.Different == 0)
+        {
+            MessageBox.Show(this, result.Summary + report, L.T("Verifica del backup"), MessageBoxButtons.OK,
+                ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            return;
+        }
+        if (MessageBox.Show(this, result.Summary + report + "\n\n" +
+                L.F("Ricopiare dal telefono i {0} file diversi? La copia sul PC di questi file verrà sostituita.", Format.Number(result.Different)),
+                L.T("Verifica del backup"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+        {
+            // "No" è una scelta: non vengono ricopiati nemmeno se poi si attiva "Sovrascrivi i conflitti"
+            foreach (var i in result.DifferentItems) _manualActions[i.RelativePath] = ItemAction.Skip;
+            return;
+        }
+        foreach (var i in result.DifferentItems) _manualActions[i.RelativePath] = ItemAction.Copy;
+        _plan = WithManualActions(await Task.Run(() => SyncEngine.PlanFromSession(session, _settings.ToOptions(), _log, writeDiagnostics: false)));
+        UpdateFilterCounts();
+        RefreshView();
+        await SyncAsync(confirm: true);
     }
 
     /// <summary>Riapplica al piano ricalcolato le scelte manuali fatte sull'elenco acquisito.</summary>
@@ -1011,11 +1132,11 @@ internal sealed class MainForm : Form
             li.SubItems.Add(L.T("Android non permette di leggerlo: non copiato"));
             _lvErrors.Items.Add(li);
         }
-        foreach (var i in plan.Items.Where(i => i.Status is ItemStatus.Failed or ItemStatus.NotProcessed or ItemStatus.ContentDiffers || i.Category is ItemCategory.Collision or ItemCategory.Blocked))
+        foreach (var i in plan.Items.Where(i => i.Status is ItemStatus.Failed or ItemStatus.NotProcessed or ItemStatus.ContentDiffers or ItemStatus.Unreadable || i.Category is ItemCategory.Collision or ItemCategory.Blocked))
         {
             var li = new ListViewItem(i.RelativePath)
             {
-                ForeColor = i.Status == ItemStatus.Failed ? Color.Firebrick : i.Status == ItemStatus.ContentDiffers ? Color.DarkOrange : SystemColors.GrayText,
+                ForeColor = i.Status == ItemStatus.Failed ? Color.Firebrick : i.Status is ItemStatus.ContentDiffers or ItemStatus.Unreadable ? Color.DarkOrange : SystemColors.GrayText,
             };
             li.SubItems.Add(i.Attempts.ToString());
             li.SubItems.Add(i.Error ?? (i.Status == ItemStatus.NotProcessed ? L.T("Non elaborato") : ""));
@@ -1079,7 +1200,7 @@ internal sealed class MainForm : Form
         if (_plan is null) { _view = new(); _lvFiles.VirtualListSize = 0; return; }
         var cats = _filterChecks.Where(kv => kv.Value.Checked).Select(kv => kv.Key).ToHashSet();
         IEnumerable<SyncItem> q = _plan.Items.Where(i => cats.Contains(i.Category));
-        if (_chkOnlyErrors.Checked) q = _plan.Items.Where(i => i.Status is ItemStatus.Failed or ItemStatus.NotProcessed || i.Category is ItemCategory.Collision or ItemCategory.Blocked);
+        if (_chkOnlyErrors.Checked) q = _plan.Items.Where(i => i.Status is ItemStatus.Failed or ItemStatus.NotProcessed or ItemStatus.ContentDiffers or ItemStatus.Unreadable || i.Category is ItemCategory.Collision or ItemCategory.Blocked);
         Func<SyncItem, object> key = _sortColumn switch
         {
             0 => i => StatusText(i),
@@ -1102,7 +1223,8 @@ internal sealed class MainForm : Form
         var i = _view[index];
         var li = new ListViewItem(StatusText(i)) { UseItemStyleForSubItems = true, ForeColor = CategoryColor(i.Category) };
         if (i.Status == ItemStatus.Failed) li.ForeColor = Color.Firebrick;
-        else if (i.Status == ItemStatus.Done) li.ForeColor = Color.DarkGreen;
+        else if (i.Status is ItemStatus.Done or ItemStatus.Verified) li.ForeColor = Color.DarkGreen;
+        else if (i.Status is ItemStatus.ContentDiffers or ItemStatus.Unreadable) li.ForeColor = Color.DarkOrange;
         li.SubItems.Add(CategoryText(i.Category) + (i.Category == ItemCategory.Excluded && i.Remote is null ? " " + L.T("(solo PC)") : ""));
         li.SubItems.Add(i.RelativePath);
         li.SubItems.Add(i.Remote is null ? "" : Format.Bytes(i.Remote.Size));
@@ -1115,10 +1237,20 @@ internal sealed class MainForm : Form
         return li;
     }
 
-    private static string StatusText(SyncItem i) => i.Action switch
+    /// <summary>Ultima verifica del backup rapida (solo inizio e fine dei file): la lista non dice "identico".</summary>
+    private bool _lastVerifyQuick;
+
+    private string StatusText(SyncItem i) => i.Action switch
     {
-        ItemAction.Skip => i.Category is ItemCategory.Identical or ItemCategory.OnlyOnPc ? "—"
-            : i.Category == ItemCategory.Excluded ? L.T("Escluso") : L.T("Non copiare"),
+        ItemAction.Skip => i.Status switch
+        {
+            ItemStatus.Verified => _lastVerifyQuick ? L.T("✔ Inizio e fine uguali") : L.T("✔ Verificato: identico (MD5)"),
+            ItemStatus.ContentDiffers => L.T("≠ Contenuto diverso"),
+            ItemStatus.Failed => L.T("✖ Verifica"),
+            ItemStatus.NotProcessed => L.T("Non verificato"),
+            _ => i.Category is ItemCategory.Identical or ItemCategory.OnlyOnPc ? "—"
+                : i.Category == ItemCategory.Excluded ? L.T("Escluso") : L.T("Non copiare"),
+        },
         ItemAction.FixTimes => i.Status switch
         {
             ItemStatus.Done => L.T("✔ Date allineate"),
@@ -1144,6 +1276,7 @@ internal sealed class MainForm : Form
             ItemStatus.Failed => L.T("✖ Errore"),
             ItemStatus.NotProcessed => L.T("Non elaborato"),
             ItemStatus.Requeued => L.T("In coda (stallo)"),
+            ItemStatus.Unreadable => L.T("⚠ Non leggibile"),
             _ => "",
     };
 

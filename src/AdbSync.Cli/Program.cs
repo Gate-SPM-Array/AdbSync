@@ -5,7 +5,7 @@ namespace AdbSync.Cli;
 
 internal static class Program
 {
-    private const string AppVersion = "0.1.7";
+    private const string AppVersion = "0.1.8";
 
     private static async Task<int> Main(string[] args)
     {
@@ -22,6 +22,7 @@ internal static class Program
               adbsync-cli devices
               adbsync-cli compare  -r <cartella telefono> -l <cartella PC> [opzioni]
               adbsync-cli sync     -r <cartella telefono> -l <cartella PC> [opzioni] [--yes]
+              adbsync-cli verify   -r <cartella telefono> -l <cartella PC> [--quick]   (verifica il backup: hash telefono ↔ PC)
               adbsync-cli setup-adb          (scarica le platform-tools ufficiali Google)
 
             Opzioni:
@@ -46,8 +47,9 @@ internal static class Program
               --lang <codice>            lingua dei messaggi (it, en, ... = file lang\<codice>.json); predefinita: quella dell'interfaccia grafica
               --list                     (compare) elenca i file da copiare
               --yes                      (sync) non chiedere conferma
+              --quick                    (verify) verifica rapida: primi e ultimi 64 KB di ogni file (predefinita: MD5 completo)
 
-            Codici di uscita: 0 = tutto eseguito, 1 = errori su alcuni file, 2 = interrotto o scansione incompleta, 3 = errore di utilizzo/avvio.
+            Codici di uscita: 0 = tutto eseguito, 1 = errori su alcuni file o file diversi dal telefono, 2 = interrotto o scansione incompleta, 3 = errore di utilizzo/avvio.
             Dati (impostazioni, log, platform-tools): nella cartella del programma (portable).
             """));
             return args.Length == 0 ? 3 : 0;
@@ -114,7 +116,7 @@ internal static class Program
                 return 3;
             }
 
-            var device = env.OpenDevice(dev.Serial, dev.ToString());
+            var device = env.OpenDevice(dev.Serial, dev.LogName);
             DeviceIdentity id;
             try
             {
@@ -140,6 +142,25 @@ internal static class Program
 
             var plan = await SyncEngine.CompareAsync(device, a.Remote, a.Local, options, log, StatusLine, cts.Token);
             ClearStatusLine();
+
+            if (a.Command == "verify")
+            {
+                var verifier = new SyncEngine(device, options, log);
+                var check = verifier.VerifyBackupAsync(plan, a.Quick, cts.Token);
+                while (!check.IsCompleted)
+                {
+                    await Task.WhenAny(check, Task.Delay(1000));
+                    if (!check.IsCompleted) StatusLine(Describe(verifier.Progress));
+                }
+                var vr = await check;
+                ClearStatusLine();
+                Console.WriteLine();
+                Console.WriteLine(vr.Summary);
+                if (vr.ReportPath is not null) Console.WriteLine(L.F("Report: {0}", vr.ReportPath));
+                if (log.LogFilePath is not null) Console.WriteLine(L.F("Log: {0}", log.LogFilePath));
+                // 0 solo se il backup è completo e verificato (cartella sbagliata o vuota = 1)
+                return vr.Cancelled || vr.AbortReason is not null ? 2 : vr.Complete && (vr.Total > 0 || plan.RemoteFileCount == 0) ? 0 : 1;
+            }
 
             if (a.Command == "compare")
             {
@@ -271,14 +292,14 @@ internal static class Program
         public string Command = "";
         public string? Remote, Local, Serial, AdbPath;
         public DateAlignMode Align = DateAlignMode.None;
-        public bool SizeOnly, NoDst, OverwriteConflicts, NoDefaultExcludes, Verify, Yes, List, Diagnostic, SyncV2;
+        public bool SizeOnly, NoDst, OverwriteConflicts, NoDefaultExcludes, Verify, Yes, List, Diagnostic, SyncV2, Quick;
         public List<string> Excludes = new();
         public int Parallel = 2, Stall = 30, Retries = 5, WaitDevice = 300, DiskStall = 120;
 
         public static Args Parse(string[] args)
         {
             var a = new Args { Command = args[0].ToLowerInvariant() };
-            if (a.Command is not ("devices" or "compare" or "sync" or "setup-adb"))
+            if (a.Command is not ("devices" or "compare" or "sync" or "verify" or "setup-adb"))
                 throw new ArgumentException(L.F("comando sconosciuto '{0}'", args[0]));
             for (int i = 1; i < args.Length; i++)
             {
@@ -313,6 +334,7 @@ internal static class Program
                     case "--diagnostic": a.Diagnostic = true; break;
                     case "--yes": case "-y": a.Yes = true; break;
                     case "--list": a.List = true; break;
+                    case "--quick": a.Quick = true; break;
                     case "--v2": a.SyncV2 = true; break;
                     case "--disk-stall":
                         a.DiskStall = NextInt();

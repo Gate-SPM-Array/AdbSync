@@ -10,6 +10,9 @@ public sealed record DeviceInfo(string Serial, string Model, string State, bool 
     public override string ToString() =>
         IsOnline ? $"{Model} ({Serial})" : $"{Model} ({Serial}) — {StateLabel}";
 
+    /// <summary>Nome per log e report: modello e solo le ultime 4 cifre del numero di serie.</summary>
+    public string LogName => $"{Model} (…{LogSessions.SerialSuffix(Serial)})";
+
     public string StateLabel => State switch
     {
         "Online" => L.T("connesso"),

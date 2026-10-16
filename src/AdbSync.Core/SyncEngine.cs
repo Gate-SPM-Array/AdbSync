@@ -19,10 +19,14 @@ public class StallException(string message) : TransientCopyException(message);
 /// <summary>Scrittura sul disco del PC ferma oltre il limite: non è colpa del telefono.</summary>
 public sealed class DiskStallException(string message) : StallException(message);
 /// <summary>Copia ricevuta ma non valida (MD5 diverso): il parziale va buttato, non ripreso.</summary>
-public sealed class CorruptCopyException(string message) : TransientCopyException(message);
+public sealed class CorruptCopyException(string message, bool md5Mismatch = false) : TransientCopyException(message)
+{
+    /// <summary>Vero se la copia è stata scartata perché l'MD5 non coincideva con quello del telefono.</summary>
+    public bool Md5Mismatch { get; } = md5Mismatch;
+}
 
 /// <summary>Esegue confronto e copia con verifica, ritentativi, rilevamento stalli e attesa riconnessione.</summary>
-public sealed class SyncEngine
+public sealed partial class SyncEngine
 {
     private readonly IRemoteDevice _device;
     private readonly SyncOptions _o;
@@ -35,6 +39,28 @@ public sealed class SyncEngine
     private CancellationTokenSource? _abortCts;
     private volatile string? _abortReason;
     private string _localRoot = "";
+    /// <summary>MD5 dei file verificati in questa esecuzione (solo quelli: nessun costo per gli altri file).</summary>
+    /// <summary>16 byte per file verificato (non stringhe): a 1.000.000 di file resta nell'ordine di 30 MB.</summary>
+    private readonly Dictionary<SyncItem, UInt128> _md5 = new();
+    /// <summary>File con almeno una copia scartata per MD5 diverso.</summary>
+    private readonly ConcurrentDictionary<SyncItem, byte> _corruptItems = new();
+
+    private void RecordMd5(SyncItem item, string hex)
+    {
+        var v = System.Buffers.Binary.BinaryPrimitives.ReadUInt128BigEndian(Convert.FromHexString(hex));
+        lock (_md5) _md5[item] = v;
+    }
+
+    private bool HasMd5(SyncItem item) { lock (_md5) return _md5.ContainsKey(item); }
+
+    private string Md5Text(SyncItem item)
+    {
+        UInt128 v;
+        lock (_md5) if (!_md5.TryGetValue(item, out v)) return "";
+        Span<byte> b = stackalloc byte[16];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt128BigEndian(b, v);
+        return Convert.ToHexStringLower(b);
+    }
 
     public SyncProgress Progress { get; } = new();
 
@@ -335,47 +361,15 @@ public sealed class SyncEngine
         {
             ct.ThrowIfCancellationRequested();
             Progress.Phase = L.F("Verifica e allineamento date: {0} di {1}", Format.Number(done), Format.Number(todo.Count));
-            IReadOnlyDictionary<string, string?> remoteHashes;
-            for (int attempt = 1; ; attempt++)
-            {
-                try
-                {
-                    remoteHashes = await _device.HashBatchAsync(plan.RemoteRoot, batch.Select(i => i.RelativePath).ToList(), quick, ct);
-                    break;
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (DeviceUnavailableException) { throw; }
-                catch (Exception ex) when (attempt < 3)
-                {
-                    _log.Warn(L.F("Calcolo hash sul telefono non riuscito ({0}): riprovo.", ex.Message));
-                    await Task.Delay(BackoffDelay(attempt), ct);
-                    await EnsureDeviceAsync(ct);
-                }
-                catch (Exception ex)
-                {
-                    // Blocco non verificabile: i suoi file restano com'erano (date non toccate) e sono segnalati; si prosegue.
-                    _log.Error(L.F("Calcolo hash sul telefono non riuscito dopo 3 tentativi ({0}): {1} file non verificati.", ex.Message, batch.Count));
-                    remoteHashes = new Dictionary<string, string?>();
-                    break;
-                }
-            }
-
-            // hash locali in parallelo (il disco del PC è il limite, non la CPU)
-            var localHashes = new ConcurrentDictionary<SyncItem, string?>();
-            await Parallel.ForEachAsync(batch, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (i, token) =>
-            {
-                string path = PathMapper.ToLocalFullPath(plan.LocalRoot, i.LocalRelativePath);
-                localHashes[i] = await LocalHash(path, quick, token);
-            });
+            var remoteHashes = await RemoteHashesAsync(plan.RemoteRoot, batch, quick, ct);
+            var localHashes = await LocalHashesAsync(plan.LocalRoot, batch, quick, ct);
 
             foreach (var i in batch)
             {
                 done++;
                 string path = PathMapper.ToLocalFullPath(plan.LocalRoot, i.LocalRelativePath);
-                remoteHashes.TryGetValue(i.RelativePath, out var rh);
+                string? rh = ValidRemoteHash(remoteHashes, i, quick);
                 localHashes.TryGetValue(i, out var lh);
-                // MD5 di "niente" per un file non vuoto = lettura fallita (shell senza pipefail): non è un confronto valido.
-                if (rh == EmptyMd5 && (quick ? Math.Min(i.RemoteSize, 2L * QuickHashWindow) : i.RemoteSize) > 0) rh = null;
                 if (string.IsNullOrEmpty(rh) || string.IsNullOrEmpty(lh))
                 {
                     i.Status = ItemStatus.Failed;
@@ -402,6 +396,7 @@ public sealed class SyncEngine
                     }
                     SetFileTimes(path, i.Remote!.MtimeUtc, i.Remote.MtimeUnix);
                     i.Status = ItemStatus.Done;
+                    if (!quick) RecordMd5(i, lh);
                     aligned++;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
@@ -414,6 +409,54 @@ public sealed class SyncEngine
         }
         _log.Info(L.F("Verifica completata: {0} file identici con date allineate, {1} con contenuto diverso (non toccati).", Format.Number(aligned), Format.Number(differs)));
         return aligned;
+    }
+
+    /// <summary>
+    /// Hash di un blocco calcolati sul telefono con un solo comando (3 tentativi). Se il blocco resta non verificabile
+    /// restituisce un elenco vuoto: i suoi file risultano "non verificati", mai "uguali".
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string?>> RemoteHashesAsync(string remoteRoot, List<SyncItem> batch, bool quick, CancellationToken ct)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await _device.HashBatchAsync(remoteRoot, batch.Select(i => i.RelativePath).ToList(), quick, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (DeviceUnavailableException) { throw; }
+            catch (Exception ex) when (attempt < 3)
+            {
+                _log.Warn(L.F("Calcolo hash sul telefono non riuscito ({0}): riprovo.", ex.Message));
+                await Task.Delay(BackoffDelay(attempt), ct);
+                await EnsureDeviceAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _log.Error(L.F("Calcolo hash sul telefono non riuscito dopo 3 tentativi ({0}): {1} file non verificati.", ex.Message, batch.Count));
+                return new Dictionary<string, string?>();
+            }
+        }
+    }
+
+    /// <summary>Hash locali in parallelo (il disco del PC è il limite, non la CPU).</summary>
+    private static async Task<ConcurrentDictionary<SyncItem, string?>> LocalHashesAsync(string localRoot, List<SyncItem> batch, bool quick, CancellationToken ct)
+    {
+        var localHashes = new ConcurrentDictionary<SyncItem, string?>();
+        await Parallel.ForEachAsync(batch, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (i, token) =>
+        {
+            localHashes[i] = await LocalHash(PathMapper.ToLocalFullPath(localRoot, i.LocalRelativePath), quick, token);
+        });
+        return localHashes;
+    }
+
+    /// <summary>Hash del telefono per l'elemento, null se assente o non valido.</summary>
+    private static string? ValidRemoteHash(IReadOnlyDictionary<string, string?> remoteHashes, SyncItem i, bool quick)
+    {
+        remoteHashes.TryGetValue(i.RelativePath, out var rh);
+        // MD5 di "niente" per un file non vuoto = lettura fallita (shell senza pipefail): non è un confronto valido.
+        if (rh == EmptyMd5 && (quick ? Math.Min(i.RemoteSize, 2L * QuickHashWindow) : i.RemoteSize) > 0) return null;
+        return string.IsNullOrEmpty(rh) ? null : rh;
     }
 
     /// <summary>Blocchi da al massimo 200 file e ~16 KB di percorsi: un solo comando sul telefono per blocco.</summary>
@@ -578,15 +621,20 @@ public sealed class SyncEngine
         if (verifyPending > 0)
             metaErrors.Add(L.F("{0} file con stessa dimensione NON verificati ({1}): date non toccate.", Format.Number(verifyPending), cancelled ? L.T("annullato") : L.T("lavoro interrotto")));
 
+        int unreadable = items.Count(i => i.Status == ItemStatus.Unreadable);
         var result = new SyncResult
         {
+            Unreadable = unreadable,
+            Md5Enabled = _o.VerifyHash,
+            Md5Verified = items.Count(i => i.Status == ItemStatus.Done && HasMd5(i)),
+            CorruptRedone = _corruptItems.Count,
             Copied = items.Count(i => i.Status == ItemStatus.Done),
             Failed = items.Count(i => i.Status == ItemStatus.Failed),
             NotProcessed = items.Count(i => i.Status == ItemStatus.NotProcessed),
             BytesCopied = items.Where(i => i.Status == ItemStatus.Done).Sum(i => i.RemoteSize),
             DirsCreated = dirsCreated,
             TimesFixed = timesFixed,
-            NotCopiable = plan.NotCopiable,
+            NotCopiable = plan.NotCopiable + unreadable,
             DatesVerifiedAligned = verifiedAligned,
             ContentDiffers = plan.Items.Count(i => i.Status == ItemStatus.ContentDiffers),
             Stalls = Progress.Stalls,
@@ -663,6 +711,7 @@ public sealed class SyncEngine
         ItemStatus.Failed => L.F("NON copiato: {0}", i.Error),
         ItemStatus.NotProcessed => L.F("NON copiato: {0}", i.Error),
         ItemStatus.ContentDiffers => L.F("contenuto diverso: {0}", i.Error),
+        ItemStatus.Unreadable => L.F("NON copiabile: {0}", i.Error),
         _ => i.Category switch
         {
             ItemCategory.Identical => L.T("già presente"),
@@ -680,14 +729,14 @@ public sealed class SyncEngine
         {
             string path = Path.Combine(_log.LogDirectory, $"report_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
             using var w = new StreamWriter(path, false, new UTF8Encoding(true));
-            w.WriteLine("Oggetto;Percorso telefono;Percorso PC;Categoria;Azione;Esito;Tentativi;Dimensione;Errore");
+            w.WriteLine("Oggetto;Percorso telefono;Percorso PC;Categoria;Azione;Esito;Tentativi;Dimensione;Errore;MD5");
             foreach (var d in plan.Directories.Where(d => d.NeedsCreate || d.Error is not null))
                 w.WriteLine(string.Join(';', "cartella", Csv(d.RelativePath), Csv(d.LocalRelativePath), "", d.NeedsCreate ? "crea" : "allinea date",
                     d.Error is null ? "Done" : "Failed", "", "", Csv(d.Error ?? "")));
             foreach (var i in plan.Items.Where(i => i.Action != ItemAction.Skip || i.Error is not null))
             {
                 w.WriteLine(string.Join(';', "file", Csv(i.RelativePath), Csv(i.LocalRelativePath), i.Category, i.Action,
-                    i.Status, i.Attempts, i.RemoteSize, Csv(i.Error ?? "")));
+                    i.Status, i.Attempts, i.RemoteSize, Csv(i.Error ?? ""), Md5Text(i)));
             }
             w.WriteLine();
             w.WriteLine(Csv(result.Summary));
@@ -699,8 +748,9 @@ public sealed class SyncEngine
             return null;
         }
 
-        static string Csv(string s) => s.IndexOfAny(new[] { ';', '"', '\n', '\r' }) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
     }
+
+    private static string Csv(string s) => s.IndexOfAny(new[] { ';', '"', '\n', '\r' }) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
 
     private void Abort(string reason)
     {
@@ -728,7 +778,7 @@ public sealed class SyncEngine
         }
     }
 
-    private enum FailureKind { Transient, Permanent, Fatal }
+    private enum FailureKind { Transient, Permanent, Fatal, Unreadable }
 
     private async Task<IRemoteTransfer?> CopyItemAsync(int slot, SyncItem item, SyncPlan plan, IRemoteTransfer? transfer,
         ConcurrentQueue<SyncItem> queue, CancellationToken ct)
@@ -785,6 +835,7 @@ public sealed class SyncEngine
                 // Il parziale si conserva solo se i dati scritti sono buoni (interruzione, non copia sbagliata):
                 // al tentativo successivo non si riscrive ciò che c'è già, e il disco non subisce cancella-e-riscrivi.
                 keepPartial = kind == FailureKind.Transient && ex is not CorruptCopyException && ex is not LocalIoException;
+                if (ex is CorruptCopyException { Md5Mismatch: true }) _corruptItems.TryAdd(item, 0);
                 if (kind == FailureKind.Transient && ex is not TransientCopyException)
                     _log.Debug($"Dettaglio errore su {item.RelativePath}: {ex}");
             }
@@ -829,6 +880,16 @@ public sealed class SyncEngine
             {
                 item.AddStall();
                 Progress.AddStall(diskStall ? DiskStallTimeout : StallTimeout);
+            }
+            if (kind == FailureKind.Unreadable)
+            {
+                // Android non lo lascia leggere (tipicamente Android/data): non copiabile, non è un errore della copia.
+                TryDelete(tempPath);
+                item.Status = ItemStatus.Unreadable;
+                item.Error = L.T("Android non permette di leggere questo file (permesso negato): non copiabile");
+                Progress.FileFailed(item.RemoteSize);
+                _log.Warn(L.F("Non leggibile sul telefono (permesso negato): {0}", item.RelativePath));
+                return null;
             }
             if (kind == FailureKind.Permanent || attempt >= maxAttempts)
             {
@@ -1074,6 +1135,7 @@ public sealed class SyncEngine
             }
         }
 
+        string? verifiedMd5 = null;
         if (_o.VerifyHash)
         {
             string? remoteMd5 = await _device.Md5Async(remotePath, ct);
@@ -1086,7 +1148,8 @@ public sealed class SyncEngine
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new LocalIoException(ex); }
             if (!string.Equals(remoteMd5, localMd5, StringComparison.OrdinalIgnoreCase))
-                throw new CorruptCopyException(L.F("MD5 diverso (telefono {0}, PC {1}): copia corrotta", remoteMd5, localMd5));
+                throw new CorruptCopyException(L.F("MD5 diverso (telefono {0}, PC {1}): copia corrotta", remoteMd5, localMd5), md5Mismatch: true);
+            verifiedMd5 = localMd5;
         }
 
         if (LocalChangedSincePlan(item, finalPath) is { } changed)
@@ -1101,6 +1164,7 @@ public sealed class SyncEngine
             File.Move(tempPath, finalPath, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new LocalIoException(ex); }
+        if (verifiedMd5 is not null) RecordMd5(item, verifiedMd5);   // solo per un file davvero scritto
 
         try
         {
@@ -1269,7 +1333,7 @@ public sealed class SyncEngine
         if (msg.Contains("No such file", StringComparison.OrdinalIgnoreCase))
             return (FailureKind.Permanent, L.T("il file non è più presente sul telefono"));
         if (msg.Contains("Permission denied", StringComparison.OrdinalIgnoreCase))
-            return (FailureKind.Permanent, L.T("permesso negato sul telefono"));
+            return (FailureKind.Unreadable, L.T("permesso negato sul telefono"));
         return (FailureKind.Transient, $"{ex.GetType().Name}: {msg}");
     }
 

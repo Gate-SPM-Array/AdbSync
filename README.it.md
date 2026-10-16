@@ -1,4 +1,4 @@
-# AdbSync v0.1.7
+# AdbSync v0.1.8
 
 [English](README.md) · **Italiano**
 
@@ -34,7 +34,7 @@ Se la cartella non è scrivibile (es. `C:\Program Files`) il programma ripiega s
 La chiave di autorizzazione adb resta nella posizione standard di Windows (`%USERPROFILE%\.android`).
 Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *adb… → Arresta il server adb*.
 
-> Il pacchetto `AdbSync_v0.1.7_win-x64.zip` richiede il **.NET 10 Desktop Runtime x64**, che si scarica da https://dotnet.microsoft.com/download/dotnet/10.0
+> Il pacchetto `AdbSync_v0.1.8_win-x64.zip` richiede il **.NET 10 Desktop Runtime x64**, che si scarica da https://dotnet.microsoft.com/download/dotnet/10.0
 
 ## 2. Uso
 
@@ -70,7 +70,10 @@ Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *
    Dopo la copia l'elenco in memoria viene aggiornato con quello che il programma ha scritto, e compare la finestra **"Altre operazioni sull'elenco acquisito"**:
    - **Riprova i N file non copiati**: riparte subito, senza nuova scansione;
    - **Allinea le date** dei file "solo data diversa", con il livello di verifica scelto e solo per quella operazione;
+   - **Verifica il backup** (vedi sotto);
    - **Chiudi**.
+
+   **Verifica il backup** (anche da *Strumenti → Verifica il backup*; riga di comando `adbsync-cli verify`): per ogni file presente su entrambi i lati con stesso nome, dimensione e data, l'hash calcolato sul telefono viene confrontato con quello del PC, usando l'elenco acquisito (nessuna nuova scansione). *Rapida* legge i primi e gli ultimi 64 KB di ogni file; *Completa* calcola l'MD5 dell'intero file. Non viene modificato nulla: i file diversi sono elencati nella scheda Errori e in `verifica_backup_<data>.csv` (con i due hash), e vengono ricopiati dal telefono solo se lo confermi. Il risultato dice anche se il backup è completo: i file del telefono che mancano sul PC (o hanno dimensione o data diverse) vengono contati, perché non si possono verificare. Una verifica *rapida* superata dice solo che inizio e fine di ogni file coincidono.
 
    In alternativa, ripeti **Confronta → Sincronizza**: vengono copiati solo i file che mancano.
 
@@ -80,6 +83,7 @@ Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *
   - Ogni blocco dichiara quanti elementi contiene, e il programma verifica che il totale ricevuto coincida.
   - Qualsiasi errore di scansione, o un conteggio che non torna, **ferma il confronto** con un messaggio esplicito: un elenco parziale non diventa mai un piano di copia.
   - Fanno eccezione i soli "permesso negato", tipici di `Android/data` e `Android/obb`. Vengono elencati nella scheda Errori e il riepilogo finale non dice "COMPLETATO" ma "COMPLETATO CON AVVISI".
+  - Lo stesso vale per i file elencati che Android non lascia leggere durante la copia: contano come *non copiabili* (non come errori), non vengono ritentati e *Riprova* non li ripropone finché il programma resta aperto.
   - Il numero di elementi trovati viene contato in modo indipendente e confrontato con quelli ricevuti. Anche un blocco interrotto sul telefono senza alcun messaggio viene rilevato.
 - **Protezione delle modifiche sul PC**: subito prima di scrivere, il programma verifica che il file sul PC sia ancora com'era al momento del confronto. Se nel frattempo è comparso o è stato modificato, non viene toccato e viene segnalato.
 - **Collegamenti sul PC** (junction/symlink): non vengono attraversati e non vi si scrive dentro, per non uscire mai dalla cartella di destinazione.
@@ -135,7 +139,7 @@ Il riquadro *Stato* si ridimensiona trascinando il divisore sopra di esso, e la 
 | Confronta solo la dimensione | no | utile se i file sul PC sono stati copiati in passato senza conservare la data |
 | Ignora differenze di 1 ora | sì | dischi FAT/exFAT e cambio dell'ora legale |
 | Sovrascrivi i conflitti | no | il telefono "vince" anche se il PC è più recente |
-| Verifica MD5 | no | massima garanzia di integrità, ma più lento |
+| Verifica MD5 | no | massima garanzia di integrità, ma più lento. Il riepilogo dice su quanti file copiati l'MD5 è risultato uguale e il report CSV ha la colonna MD5; senza, il riepilogo dice che è stata controllata solo la dimensione |
 | Trasferimenti paralleli | 2 | da 2 a 4 aiuta con molti file piccoli (es. WhatsApp) |
 | Timeout stallo telefono | 30 s | minimo 1 s; il file bloccato torna in fondo alla coda |
 | Timeout scrittura su disco (PC) (menu *Strumenti*) | 120 s | minimo 30 s; una scrittura su disco più lenta chiude il trasferimento e rimette il file in coda |
@@ -152,17 +156,18 @@ adbsync-cli devices
 adbsync-cli compare -r /sdcard/DCIM -l "D:\Backup\Telefono\DCIM" --list
 adbsync-cli sync    -r /sdcard/DCIM -l "D:\Backup\Telefono\DCIM" --yes --verify
 adbsync-cli sync    -r /sdcard -l "D:\Backup\Telefono" --parallel 4 --stall 5 --retries 20 --align-dates quick
+adbsync-cli verify  -r /sdcard/DCIM -l "D:\Backup\Telefono\DCIM" --quick
 adbsync-cli --help
 ```
 
-Codici di uscita: `0` tutto eseguito · `1` errori su alcuni file · `2` interrotto o scansione incompleta · `3` errore di utilizzo. Opzione `--diagnostic` per gli elenchi completi; `--align-dates none|size|quick|full` per l'allineamento delle date.
+Codici di uscita: `0` tutto eseguito · `1` errori su alcuni file (o, per `verify`, file diversi dal telefono o mancanti sul PC) · `2` interrotto o scansione incompleta · `3` errore di utilizzo. Opzione `--diagnostic` per gli elenchi completi; `--align-dates none|size|quick|full` per l'allineamento delle date.
 
 ## 6. Log e report
 
 - **Una cartella per sessione.** Una sessione inizia quando il programma è aperto e si collega un telefono, e dura finché il programma resta aperto con lo stesso telefono (uno scollegamento durante la copia non ne apre una nuova). Anche ogni avvio di `adbsync-cli` è una sessione.
   ```
   logs\
-    2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-David\
+    2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-Mario\
       sessione.log                     tutto quello che è successo nella sessione
       report_AAAAMMGG_hhmmss.csv       uno per ogni sincronizzazione, apribile con Excel, esito file per file
       nomi_convertiti_AAAAMMGG_hhmmss.txt
@@ -172,6 +177,7 @@ Codici di uscita: `0` tutto eseguito · `1` errori su alcuni file · `2` interro
   ```
   Il nome della cartella è data e ora (così le cartelle sono in ordine cronologico), produttore e modello, e il nome dato al telefono nelle impostazioni di Android (o il suo nome Bluetooth). I caratteri non validi su Windows diventano `-`. Il numero di serie non viene mai usato, salvo le ultime 4 cifre quando sono collegati due telefoni dello stesso modello.
 - **SystemLOG**: quello che non fa parte di una sessione di copia — avvio e chiusura del programma (versione, Windows, .NET, lingua, migrazioni), adb (percorso, server, errori, telefono non autorizzato), telefoni rilevati e scollegati, quale cartella di sessione è stata aperta, errori imprevisti e crash, anche prima che compaia la finestra. Interfaccia grafica e riga di comando possono scriverci insieme; ogni riga dice chi l'ha scritta (`[GUI]`, `[CLI]`).
+- **Log per una segnalazione**: *Aiuto → Prepara log per segnalazione* crea `logs\segnalazione_<data>.zip` con il log della sessione corrente e il SystemLOG, senza report né elenchi dei file. I log non contengono mai il numero di serie completo del telefono (solo le ultime 4 cifre), ma contengono nomi e percorsi dei tuoi file: controlla lo zip prima di allegarlo a una segnalazione pubblica.
 - **Nessuna cancellazione automatica.** All'apertura il programma mostra quante sessioni contiene la cartella log e quanto occupa in totale (riquadro Stato e SystemLOG); le sessioni vecchie le cancelli tu quando vuoi. Menu *File*: *Apri cartella log e report* e *Apri cartella della sessione corrente*.
 - I log delle versioni precedenti alla 0.1.7 restano dove sono (direttamente in `logs\`).
 - Impostazioni: `data\settings.json` nella cartella del programma.
@@ -184,7 +190,7 @@ Codici di uscita: `0` tutto eseguito · `1` errori su alcuni file · `2` interro
 - I file più piccoli sul PC ma più recenti (per esempio copie MTP interrotte) risultano *Conflitto* e non vengono copiati, salvo l'opzione *Sovrascrivi i conflitti*. Si individuano con il filtro Conflitto.
 
 - Solo direzione telefono → PC, solo modalità *Aggiorna* (niente *Mirror*, niente cancellazioni).
-- Da Android 11, `Android/data` e `Android/obb` non sono leggibili via ADB senza root: vengono segnalate come avvisi nel log.
+- Da Android 11, `Android/data` e `Android/obb` non sono leggibili via ADB senza root: vengono segnalate come avvisi (non copiabili), non come errori.
 - Senza *Verifica MD5*, una corruzione che lascia invariata la dimensione del file non è rilevabile. È un caso molto raro, perché ADB usa già un protocollo affidabile su USB.
 - Con più telefoni collegati si sceglie quello da usare dall'elenco.
 - In inglese i plurali non sono gestiti ("1 files").
@@ -198,7 +204,7 @@ src/AdbSync.Core   motore: scansione, confronto, copia robusta (multipiattaforma
 src/AdbSync.Gui    interfaccia Windows Forms
 src/AdbSync.Cli    riga di comando
 lang/              file di traduzione (en.json = riferimento)
-tests/             126 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
+tests/             139 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
 ```
 
 Compilazione: .NET 10 SDK → `dotnet build`. Test: `dotnet test`.

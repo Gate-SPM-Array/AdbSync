@@ -168,7 +168,7 @@ internal sealed class ExcludesDialog : Form
 /// <summary>Fine esecuzione: propone le operazioni successive sull'elenco già acquisito (senza nuova scansione).</summary>
 internal sealed class PostRunDialog : Form
 {
-    public enum Choice { Close, RetryFailed, AlignDates }
+    public enum Choice { Close, RetryFailed, AlignDates, VerifyBackup }
 
     public Choice Result { get; private set; } = Choice.Close;
     public DateAlignMode AlignMode => _cmbAlign.SelectedIndex switch { 0 => DateAlignMode.Quick, 1 => DateAlignMode.Full, _ => DateAlignMode.SizeOnly };
@@ -214,10 +214,52 @@ internal sealed class PostRunDialog : Form
             b.Click += (_, _) => { Result = Choice.AlignDates; DialogResult = DialogResult.OK; };
             root.Controls.Add(b);
         }
+        var verify = new Button { Text = L.T("Verifica il backup: confronta gli hash di tutti i file presenti su telefono e PC..."), AutoSize = true, Margin = new Padding(3, 12, 3, 3) };
+        verify.Click += (_, _) => { Result = Choice.VerifyBackup; DialogResult = DialogResult.OK; };
+        root.Controls.Add(verify);
         var close = new Button { Text = L.T("Chiudi"), AutoSize = true, DialogResult = DialogResult.Cancel, Margin = new Padding(3, 16, 3, 3) };
         root.Controls.Add(close);
         CancelButton = close;
         Controls.Add(root);
+    }
+}
+
+/// <summary>Verifica del backup: scelta tra verifica rapida e MD5 completo.</summary>
+internal sealed class VerifyDialog : Form
+{
+    private readonly RadioButton _quick;
+    private readonly RadioButton _full;
+    public bool Quick => _quick.Checked;
+
+    public VerifyDialog(int files, long bytes)
+    {
+        Text = L.T("Verifica del backup");
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = MinimizeBox = false;
+        ShowInTaskbar = false;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(12), WrapContents = false };
+        int width = LogicalToDeviceUnits(560);
+        root.Controls.Add(new Label
+        {
+            Text = L.F("Confronta l'hash calcolato sul telefono con quello del PC per i {0} file presenti su entrambi con stesso nome, dimensione e data ({1}). Non modifica nulla e non richiede una nuova scansione.", Format.Number(files), Format.Bytes(bytes)),
+            AutoSize = true, MaximumSize = new Size(width, 0), Margin = new Padding(3, 3, 3, 10),
+        });
+        _quick = new RadioButton { Text = L.T("Rapida: primi e ultimi 64 KB di ogni file (minuti; non vede differenze solo a metà file)"), AutoSize = true, MaximumSize = new Size(width, 0), Checked = true };
+        _full = new RadioButton { Text = L.T("Completa: MD5 dell'intero file (legge tutti i dati su telefono e PC: per molti GB servono ore)"), AutoSize = true, MaximumSize = new Size(width, 0) };
+        root.Controls.Add(_quick);
+        root.Controls.Add(_full);
+        var ok = new Button { Text = L.T("Avvia la verifica"), DialogResult = DialogResult.OK, AutoSize = true, Enabled = files > 0 };
+        var cancel = new Button { Text = L.T("Annulla"), DialogResult = DialogResult.Cancel, AutoSize = true };
+        var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, Margin = new Padding(0, 10, 0, 0) };
+        buttons.Controls.Add(ok);
+        buttons.Controls.Add(cancel);
+        root.Controls.Add(buttons);
+        Controls.Add(root);
+        AcceptButton = ok;
+        CancelButton = cancel;
     }
 }
 

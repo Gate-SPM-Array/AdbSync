@@ -80,6 +80,10 @@ public enum ItemStatus
     Done, Failed, NotProcessed,
     /// <summary>Verifica eseguita: il contenuto sul PC è DIVERSO da quello del telefono (date non toccate).</summary>
     ContentDiffers,
+    /// <summary>Android non permette di leggere il file (permesso negato): non copiabile, non è un errore della copia.</summary>
+    Unreadable,
+    /// <summary>Verifica del backup: contenuto sul PC identico al telefono (nessuna modifica).</summary>
+    Verified,
 }
 
 public sealed class SyncItem
@@ -214,6 +218,14 @@ public sealed class SyncResult
     /// <summary>File non copiati perché si bloccavano a ogni tentativo.</summary>
     public IReadOnlyList<string> AlwaysStalled { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> MetadataErrors { get; init; } = Array.Empty<string>();
+    /// <summary>File che Android non permette di leggere (permesso negato durante la copia): compresi in <see cref="NotCopiable"/>.</summary>
+    public int Unreadable { get; init; }
+    /// <summary>Verifica MD5 dei file copiati attiva.</summary>
+    public bool Md5Enabled { get; init; }
+    /// <summary>File copiati con MD5 uguale a quello calcolato sul telefono.</summary>
+    public int Md5Verified { get; init; }
+    /// <summary>File con almeno una copia scartata perché l'MD5 non coincideva (ritentati).</summary>
+    public int CorruptRedone { get; init; }
     public TimeSpan Duration { get; init; }
     public bool Cancelled { get; init; }
     public string? AbortReason { get; init; }
@@ -242,9 +254,13 @@ public sealed class SyncResult
             if (ContentDiffers > 0) head += L.F(" {0} file con stessa dimensione ma contenuto DIVERSO: lasciati invariati (vedi Errori).", Format.Number(ContentDiffers));
             if (Stalls > 0) head += L.F(" Stalli: {0} (circa {1} di attesa), file riusciti dopo più tentativi: {2}.", Format.Number(Stalls), Format.Duration(StallTimeLost), Format.Number(RecoveredAfterRetry));
             if (LeftUntouched > 0) head += L.F(" {0} file più recenti sul PC lasciati invariati (conflitti / solo data).", Format.Number(LeftUntouched));
+            if (Md5Enabled && Md5Verified > 0) head += L.F(" MD5 verificato su {0} file copiati: identici al telefono.", Format.Number(Md5Verified));
+            if (CorruptRedone > 0) head += L.F(" {0} file avevano una copia con MD5 diverso dal telefono: copia scartata e ritentata.", Format.Number(CorruptRedone));
+            if (!Md5Enabled && Copied > 0) head += L.T(" Verifica MD5 non attiva: dei file copiati è stata controllata la dimensione.");
             if (FullySucceeded) return L.F("COMPLETATO: tutto quanto previsto è stato eseguito e verificato. {0}", head);
             var parts = new List<string> { head };
-            if (NotCopiable > 0) parts.Add(L.F("{0} elementi del telefono NON copiabili (permesso negato, collisioni di nomi o bloccati: vedi Log ed Errori).", Format.Number(NotCopiable)));
+            if (NotCopiable - Unreadable > 0) parts.Add(L.F("{0} elementi del telefono NON copiabili (permesso negato, collisioni di nomi o bloccati: vedi Log ed Errori).", Format.Number(NotCopiable - Unreadable)));
+            if (Unreadable > 0) parts.Add(L.F("{0} file che Android non permette di leggere (permesso negato): non copiabili, non vengono riproposti finché il programma resta aperto.", Format.Number(Unreadable)));
             if (Failed > 0) parts.Add(L.F("{0} file NON copiati (vedi scheda Errori).", Format.Number(Failed)));
             if (NotProcessed > 0) parts.Add(L.F("{0} file non elaborati.", Format.Number(NotProcessed)));
             if (MetadataErrors.Count > 0) parts.Add(L.F("{0} cartelle/date non impostate.", Format.Number(MetadataErrors.Count)));

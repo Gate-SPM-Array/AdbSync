@@ -2,10 +2,30 @@
 
 Regola: ogni versione consegnata ha un numero diverso; anche una modifica minima del codice produce una nuova versione con la sua voce qui sotto.
 
+## v0.1.8 — 2026-10-16
+
+### Novità
+- **Verifica il backup.** Per ogni file presente su telefono e PC con stesso nome, dimensione e data, confronta l'hash calcolato sul telefono con quello del PC, usando l'elenco acquisito (nessuna nuova scansione).
+  - *Rapida*: primi e ultimi 64 KB di ogni file. *Completa*: MD5 dell'intero file. Hash del telefono a blocchi, un comando ogni 200 file.
+  - Non modifica nulla. I file diversi sono elencati nella scheda Errori e in `verifica_backup_<data>.csv` con i due hash; si ricopiano dal telefono solo dopo conferma. Nei confronti successivi restano segnalati come conflitto.
+  - Il risultato dice anche se il backup è completo: i file del telefono che mancano sul PC o hanno dimensione o data diverse vengono contati. Una verifica rapida superata dice solo che inizio e fine coincidono, non "identici".
+  - Dove: *Strumenti → Verifica il backup*, la finestra dopo la copia, riga di comando `adbsync-cli verify [--quick]` (codice di uscita 0 solo se il backup è completo e verificato).
+- **Verifica MD5 visibile.** Il riepilogo dice su quanti file copiati l'MD5 è risultato uguale al telefono e quanti file avevano una copia corrotta, poi ritentata; senza verifica MD5 dice che è stata controllata solo la dimensione. Il report CSV ha la colonna MD5.
+- **Permesso negato in lettura** (tipico di `Android/data`): il file conta come *non copiabile*, non come errore. Non viene ritentato, l'esito è "COMPLETATO CON AVVISI" e *Riprova* non lo ripropone finché il programma resta aperto.
+- **Aiuto → Prepara log per segnalazione**: zip con il log della sessione e il SystemLOG, senza report né elenchi dei file.
+
+### Corretto
+- **MD5 dei file con `\` nel nome**: `md5sum` ora legge il file da stdin. Con il nome come argomento l'output cambiava formato e la verifica falliva.
+- Il numero di serie del telefono non compare più nei log (riga "Confronto: telefono …"): solo modello e ultime 4 cifre.
+
+### Altro
+- Rilettura indipendente del codice prima della pubblicazione: la verifica mantiene le scelte manuali "Non copiare"; nessuna operazione può partire mentre un'altra si sta preparando; seriali duplicati di adb non svuotano più l'elenco dei telefoni; "No" alla ricopia dei file diversi viene ricordato; gli MD5 occupano 16 byte per file e sono registrati solo per i file davvero scritti; lo zip per le segnalazioni non contiene il nome del telefono.
+- Test: 139, di cui 13 nuovi (verifica del backup rapida e completa, backup incompleto mai dato per completo, file non verificabili, MD5 nel riepilogo e nel report, copie corrotte contate, permesso negato non riproposto, MD5 con `\` nel nome con la vera mksh + toybox, zip per le segnalazioni, numero di serie mascherato).
+
 ## v0.1.7 — 2026-10-16
 
 ### Novità
-- **Log divisi per sessione.** Prima tutti i log, i report e la diagnostica finivano insieme nella cartella `logs`. Ora ogni sessione ha la sua cartella: `logs\<data_ora>_<produttore-modello>_<nome del telefono>\`, per esempio `2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-David`.
+- **Log divisi per sessione.** Prima tutti i log, i report e la diagnostica finivano insieme nella cartella `logs`. Ora ogni sessione ha la sua cartella: `logs\<data_ora>_<produttore-modello>_<nome del telefono>\`, per esempio `2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-Mario`.
   - Una sessione inizia quando il programma è aperto e si collega un telefono, e dura finché il programma resta aperto con lo stesso telefono. Un telefono diverso apre una nuova sessione. Ogni avvio di `adbsync-cli` è una sessione.
   - Dentro la cartella: `sessione.log`, i report CSV, l'elenco dei nomi convertiti e le cartelle della modalità diagnostica.
   - Il nome del telefono è quello dato nelle impostazioni di Android (o il nome Bluetooth). Il numero di serie non compare, salvo le ultime 4 cifre se sono collegati due telefoni dello stesso modello.

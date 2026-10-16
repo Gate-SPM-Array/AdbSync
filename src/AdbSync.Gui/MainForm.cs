@@ -8,7 +8,7 @@ namespace AdbSync.Gui;
 
 internal sealed class MainForm : Form
 {
-    private static readonly string AppVersion = "0.1.5";
+    private static readonly string AppVersion = "0.1.5D";
 
     // --- stato ---
     private readonly IReadOnlyList<string> _migration = Program.MigrationMessages; // eseguita in Program.Main, prima di tutto
@@ -313,6 +313,10 @@ internal sealed class MainForm : Form
         var tools = _menuTools;
         tools.Text = L.T("&Strumenti");
         tools.DropDownItems.Add(L.T("Esclusioni..."), null, (_, _) => { if (!_busy) _btnExcludes.PerformClick(); });
+        var v2 = new ToolStripMenuItem(L.T("Protocollo di trasferimento ADB v2 (come adb pull)")) { CheckOnClick = true, Checked = _settings.SyncV2 };
+        v2.ToolTipText = L.T("Prova: usa la stessa versione del protocollo di \"adb pull\". Se il telefono non la supporta si torna da soli alla v1.");
+        v2.CheckedChanged += (_, _) => { _settings.SyncV2 = v2.Checked; _settings.Save(); _log.Info(L.F("Protocollo di trasferimento ADB impostato: {0}", v2.Checked ? "v2" : "v1")); };
+        tools.DropDownItems.Add(v2);
         tools.DropDownItems.Add(new ToolStripSeparator());
         tools.DropDownItems.AddRange(AdbMenuItems());
 

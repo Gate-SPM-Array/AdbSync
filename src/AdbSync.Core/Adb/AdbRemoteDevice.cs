@@ -1,4 +1,5 @@
 using System.Text;
+using AdvancedSharpAdbClient.Exceptions;
 using AdvancedSharpAdbClient;
 using AdvancedSharpAdbClient.Models;
 
@@ -191,9 +192,12 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         return result;
     }
 
-    public IRemoteTransfer OpenTransfer() => new AdbTransfer(_env.Client, Device);
+    /// <summary>Il telefono ha rifiutato il protocollo v2: da qui in poi si usa la v1.</summary>
+    private volatile bool _v2Unsupported;
 
-    private sealed class AdbTransfer(IAdbClient client, DeviceData device) : IRemoteTransfer
+    public IRemoteTransfer OpenTransfer(bool useV2 = false) => new AdbTransfer(_env.Client, Device, useV2, this);
+
+    private sealed class AdbTransfer(IAdbClient client, DeviceData device, bool useV2, AdbRemoteDevice owner) : IRemoteTransfer
     {
         private SyncService? _service;
         private volatile bool _disposed;
@@ -202,7 +206,21 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             _service ??= new SyncService(client, device);
-            await _service.PullAsync(remotePath, destination, e => progress((long)e.ReceivedBytesSize), useV2: false, ct);
+            bool v2 = useV2 && !owner._v2Unsupported;
+            long received = 0;
+            try
+            {
+                await _service.PullAsync(remotePath, destination, e => { received = (long)e.ReceivedBytesSize; progress(received); }, useV2: v2, ct);
+            }
+            catch (AdbException) when (v2 && received == 0 && !ct.IsCancellationRequested)
+            {
+                // v2 non supportata dal telefono (stat_v2/sendrecv_v2): si riprova subito con la v1, una volta per tutte.
+                owner._v2Unsupported = true;
+                try { _service.Dispose(); } catch { }
+                _service = new SyncService(client, device);
+                if (destination.CanSeek) { destination.SetLength(0); destination.Position = 0; }
+                await _service.PullAsync(remotePath, destination, e => progress((long)e.ReceivedBytesSize), useV2: false, ct);
+            }
         }
 
         public void Dispose()

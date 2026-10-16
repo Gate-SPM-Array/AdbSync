@@ -52,6 +52,9 @@ public sealed class SyncOptions
     /// <summary>Verifica ogni file copiato confrontando l'MD5 calcolato sul telefono con quello sul PC (più lento).</summary>
     public bool VerifyHash { get; set; }
 
+    /// <summary>Usa la versione 2 del protocollo di trasferimento ADB (come "adb pull"); se il telefono non la supporta si torna alla v1.</summary>
+    public bool UseSyncV2 { get; set; }
+
     /// <summary>Salva gli elenchi completi file per file di ogni confronto nella cartella dei log.</summary>
     public bool Diagnostic { get; set; }
 

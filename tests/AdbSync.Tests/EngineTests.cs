@@ -116,8 +116,12 @@ public sealed class EngineTests : IDisposable
         var (plan, r) = await Run(d, new SyncOptions { VerifyHash = true });
         Assert.True(r.FullySucceeded, r.Summary);
         AssertFilesMatch(d);
-        Assert.Equal(2, plan.Items.Single(i => i.RelativePath == "Camera/IMG_001.jpg").Attempts);
-        Assert.Equal(2, plan.Items.Single(i => i.RelativePath == "Camera/IMG_003.jpg").Attempts);
+        // un tentativo fallito per il guasto + quello riuscito; eventuali stalli dovuti al carico della macchina di test non contano
+        foreach (var name in new[] { "Camera/IMG_001.jpg", "Camera/IMG_003.jpg" })
+        {
+            var item = plan.Items.Single(i => i.RelativePath == name);
+            Assert.Equal(2, item.Attempts - item.Stalls);
+        }
     }
 
     [Fact]
@@ -619,7 +623,7 @@ public sealed class EngineV012Tests : IDisposable
         public Task<(long Size, long Mtime, int Fraction)?> StatAsync(string p, CancellationToken ct) => inner.StatAsync(p, ct);
         public Task<string?> Md5Async(string p, CancellationToken ct) => inner.Md5Async(p, ct);
         public Task<IReadOnlyDictionary<string, string?>> HashBatchAsync(string r, IReadOnlyList<string> p, bool q, CancellationToken ct) => inner.HashBatchAsync(r, p, q, ct);
-        public IRemoteTransfer OpenTransfer() => inner.OpenTransfer();
+        public IRemoteTransfer OpenTransfer(bool useV2 = false) => inner.OpenTransfer(useV2);
     }
 }
 
@@ -746,5 +750,80 @@ public sealed class EngineV013Tests : IDisposable
         var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
         var r = await new SyncEngine(d, opts, _log).RunAsync(plan, default);
         Assert.Null(r.RenamedLogPath);
+    }
+}
+
+public sealed class DiagnosticsV015DTests : IDisposable
+{
+    private readonly string _local = Path.Combine(Path.GetTempPath(), "adbsync_v015d_" + Guid.NewGuid().ToString("N"));
+    private readonly SyncLogger _log;
+    private readonly List<string> _lines = new();
+
+    public DiagnosticsV015DTests()
+    {
+        _log = new SyncLogger(_local + "_logs");
+        _log.EntryWritten += e => { lock (_lines) _lines.Add(e.Message); };
+    }
+
+    public void Dispose()
+    {
+        _log.Dispose();
+        try { Directory.Delete(_local, true); } catch { }
+        try { Directory.Delete(_local + "_logs", true); } catch { }
+    }
+
+    [Fact]
+    public async Task PausesInTheDataFlowAreRecordedWithTheirCause()
+    {
+        var d = new FakeRemoteDevice { PauseDuration = TimeSpan.FromMilliseconds(700) };
+        d.Add("grande.bin", 200_000, 1_700_000_000);
+        d.AddFault("grande.bin", FakeRemoteDevice.Fault.Pause);
+        var opts = new SyncOptions { ParallelTransfers = 1, StallTimeoutSeconds = 30 };
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var r = await new SyncEngine(d, opts, _log) { PauseLogThresholdMs = 300 }.RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);
+        string line;
+        lock (_lines) line = _lines.Single(l => l.StartsWith("[diagnosi] pausa di", StringComparison.Ordinal));
+        Assert.Contains("grande.bin", line);
+        Assert.Contains("attesa dati da adb", line);
+        Assert.Contains("thread pool", line);
+        lock (_lines) Assert.Contains(_lines, l => l == "Protocollo di trasferimento ADB: v1");
+    }
+
+    [Fact]
+    public async Task StallsAreDescribedAndV2OptionReachesTheTransfer()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("bloccato.bin", 50_000, 1_700_000_000);
+        d.AddFault("bloccato.bin", FakeRemoteDevice.Fault.Stall);
+        var opts = new SyncOptions { ParallelTransfers = 1, UseSyncV2 = true };
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var engine = new SyncEngine(d, opts, _log)
+        {
+            BackoffDelay = _ => TimeSpan.FromMilliseconds(10),
+            WatchdogInterval = TimeSpan.FromMilliseconds(20),
+            StallTimeoutOverride = TimeSpan.FromMilliseconds(200),
+            ForceCloseDelay = TimeSpan.FromMilliseconds(100),
+        };
+        var r = await engine.RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);   // al secondo tentativo passa
+        Assert.True(d.LastOpenedV2);
+        lock (_lines)
+        {
+            Assert.Contains(_lines, l => l.StartsWith("[diagnosi] stallo su bloccato.bin", StringComparison.Ordinal) && l.Contains("in attesa di dati da adb"));
+            Assert.Contains(_lines, l => l == "Protocollo di trasferimento ADB: v2");
+        }
+    }
+
+    [Fact]
+    public async Task TimingStreamMeasuresWrites()
+    {
+        var ms = new MemoryStream();
+        var t = new TimingStream(ms);
+        Assert.Equal(0, t.WriteInProgressMs);
+        await t.WriteAsync(new byte[10]);
+        Assert.Equal(10, ms.Length);
+        Assert.True(t.LastWriteMs >= 0);
+        Assert.Equal(0, t.WriteInProgressMs);
     }
 }

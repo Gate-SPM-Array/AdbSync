@@ -1,4 +1,4 @@
-# AdbSync v0.1.5
+# AdbSync v0.1.5D
 
 **English** · [Italiano](README.it.md)
 
@@ -34,7 +34,7 @@ If the folder is not writable (e.g. `C:\Program Files`) the program falls back t
 The adb authorization key stays in its standard Windows location (`%USERPROFILE%\.android`).
 To move or delete the program folder while adb is running: menu *adb… → Arresta il server adb* (stop the adb server).
 
-> The `AdbSync_v0.1.5_win-x64.zip` package requires the **.NET 10 Desktop Runtime x64**, available at https://dotnet.microsoft.com/download/dotnet/10.0
+> The `AdbSync_v0.1.5D_win-x64.zip` package requires the **.NET 10 Desktop Runtime x64**, available at https://dotnet.microsoft.com/download/dotnet/10.0
 
 ## 2. Usage
 
@@ -177,7 +177,7 @@ src/AdbSync.Core   engine: scan, compare, robust copy (cross-platform)
 src/AdbSync.Gui    Windows Forms user interface
 src/AdbSync.Cli    command line
 lang/              translation files (en.json = reference)
-tests/             104 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
+tests/             107 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
 ```
 
 Build: .NET 10 SDK → `dotnet build`. Tests: `dotnet test`.

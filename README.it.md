@@ -1,4 +1,4 @@
-# AdbSync v0.1.5
+# AdbSync v0.1.5D
 
 [English](README.md) · **Italiano**
 
@@ -34,7 +34,7 @@ Se la cartella non è scrivibile (es. `C:\Program Files`) il programma ripiega s
 La chiave di autorizzazione adb resta nella posizione standard di Windows (`%USERPROFILE%\.android`).
 Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *adb… → Arresta il server adb*.
 
-> Il pacchetto `AdbSync_v0.1.5_win-x64.zip` richiede il **.NET 10 Desktop Runtime x64**, che si scarica da https://dotnet.microsoft.com/download/dotnet/10.0
+> Il pacchetto `AdbSync_v0.1.5D_win-x64.zip` richiede il **.NET 10 Desktop Runtime x64**, che si scarica da https://dotnet.microsoft.com/download/dotnet/10.0
 
 ## 2. Uso
 
@@ -178,7 +178,7 @@ src/AdbSync.Core   motore: scansione, confronto, copia robusta (multipiattaforma
 src/AdbSync.Gui    interfaccia Windows Forms
 src/AdbSync.Cli    riga di comando
 lang/              file di traduzione (en.json = riferimento)
-tests/             104 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
+tests/             107 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
 ```
 
 Compilazione: .NET 10 SDK → `dotnet build`. Test: `dotnet test`.

@@ -21,6 +21,8 @@ internal sealed class AppSettings
     public bool ShowDetailedLog { get; set; }
 
     public bool Diagnostic { get; set; }
+    /// <summary>Protocollo di trasferimento ADB v2 (come "adb pull").</summary>
+    public bool SyncV2 { get; set; }
     /// <summary>Lingua dell'interfaccia: "it" (incorporata) o il codice di un file lang\&lt;codice&gt;.json.</summary>
     public string Language { get; set; } = L.DefaultCode;
     public DateAlignMode AlignSameSizeDates { get; set; } = DateAlignMode.None;
@@ -60,6 +62,7 @@ internal sealed class AppSettings
             VerifyHash = VerifyHash,
             OverwriteConflicts = OverwriteConflicts,
             ParallelTransfers = Parallel,
+            UseSyncV2 = SyncV2,
             StallTimeoutSeconds = StallSeconds,
             MaxRetries = Retries,
             DeviceWaitTimeoutSeconds = WaitDeviceSeconds,

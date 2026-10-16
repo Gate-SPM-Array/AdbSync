@@ -5,7 +5,7 @@ namespace AdbSync.Cli;
 
 internal static class Program
 {
-    private const string AppVersion = "0.1.5";
+    private const string AppVersion = "0.1.5D";
 
     private static async Task<int> Main(string[] args)
     {
@@ -41,6 +41,7 @@ internal static class Program
               --wait-device <secondi>    attesa massima di riconnessione (predefinito 300)
               --verify                   verifica MD5 di ogni file copiato
               --diagnostic               salva gli elenchi completi file per file nella cartella logs
+              --v2                       usa il protocollo di trasferimento ADB v2 (come adb pull)
               --lang <codice>            lingua dei messaggi (it, en, ... = file lang\<codice>.json); predefinita: quella dell'interfaccia grafica
               --list                     (compare) elenca i file da copiare
               --yes                      (sync) non chiedere conferma
@@ -249,7 +250,7 @@ internal static class Program
         public string Command = "";
         public string? Remote, Local, Serial, AdbPath;
         public DateAlignMode Align = DateAlignMode.None;
-        public bool SizeOnly, NoDst, OverwriteConflicts, NoDefaultExcludes, Verify, Yes, List, Diagnostic;
+        public bool SizeOnly, NoDst, OverwriteConflicts, NoDefaultExcludes, Verify, Yes, List, Diagnostic, SyncV2;
         public List<string> Excludes = new();
         public int Parallel = 2, Stall = 30, Retries = 5, WaitDevice = 300;
 
@@ -291,6 +292,7 @@ internal static class Program
                     case "--diagnostic": a.Diagnostic = true; break;
                     case "--yes": case "-y": a.Yes = true; break;
                     case "--list": a.List = true; break;
+                    case "--v2": a.SyncV2 = true; break;
                     case "--lang": Next(); break; // già gestita all'avvio (LanguageFromArgs)
                     default: throw new ArgumentException(L.F("opzione sconosciuta '{0}'", args[i]));
                 }
@@ -312,6 +314,7 @@ internal static class Program
                 VerifyHash = Verify,
                 Diagnostic = Diagnostic,
                 AlignSameSizeDates = Align,
+                UseSyncV2 = SyncV2,
             };
             if (NoDefaultExcludes) o.ExcludePatterns.Clear();
             o.ExcludePatterns.Add("*" + LocalScanner.TempSuffix);

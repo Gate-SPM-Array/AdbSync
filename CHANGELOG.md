@@ -2,6 +2,19 @@
 
 Regola: ogni versione consegnata ha un numero diverso; anche una modifica minima del codice produce una nuova versione con la sua voce qui sotto.
 
+## v0.1.5D — 2026-10-16 (diagnosi)
+
+Versione di diagnosi, cioè la 0.1.5 più gli strumenti per capire le pause nei trasferimenti dei file grandi. Il comportamento di copia non cambia.
+
+### Diagnosi
+- **Diario delle pause nel log.** Ogni interruzione del flusso di dati oltre 0,5 s viene registrata come `[diagnosi] pausa di … ms`, con:
+  - file, byte ricevuti sul totale;
+  - tempo passato a **scrivere su disco** e tempo passato ad **aspettare dati da adb**;
+  - pause del garbage collector .NET e stato del thread pool, cioè le possibili cause interne al programma.
+- **Dettaglio di ogni stallo** (`[diagnosi] stallo …`): se in quel momento il programma stava scrivendo su disco oppure aspettava dati da adb, con gli stessi indicatori del processo.
+- **Protocollo di trasferimento ADB v2**, lo stesso di `adb pull`, attivabile da *Strumenti → Protocollo di trasferimento ADB v2*. Riga di comando: `--v2`. Se il telefono non lo supporta si torna da soli alla v1. Il protocollo in uso è scritto nel log all'inizio della copia.
+- Test: 107.
+
 ## v0.1.5 — 2026-10-15
 
 ### Migliorato

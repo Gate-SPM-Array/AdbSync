@@ -511,10 +511,12 @@ public class VersionConsistencyTests
         string Match(string text, string pattern) =>
             System.Text.RegularExpressions.Regex.Match(text, pattern) is { Success: true } m ? m.Groups[1].Value : "(non trovato)";
 
-        string v = Match(Read("src/AdbSync.Core/AdbSync.Core.csproj"), @"<Version>([^<]+)</Version>");
-        Assert.Matches(@"^\d+\.\d+\.\d+$", v);
-        Assert.Equal(v, Match(Read("src/AdbSync.Gui/AdbSync.Gui.csproj"), @"<Version>([^<]+)</Version>"));
-        Assert.Equal(v, Match(Read("src/AdbSync.Cli/AdbSync.Cli.csproj"), @"<Version>([^<]+)</Version>"));
+        // csproj: 0.1.5 oppure 0.1.5-D (suffisso di diagnosi); ovunque altrove lo stesso numero scritto 0.1.5D
+        string csproj = Match(Read("src/AdbSync.Core/AdbSync.Core.csproj"), @"<Version>([^<]+)</Version>");
+        Assert.Matches(@"^\d+\.\d+\.\d+(-[A-Za-z0-9]+)?$", csproj);
+        Assert.Equal(csproj, Match(Read("src/AdbSync.Gui/AdbSync.Gui.csproj"), @"<Version>([^<]+)</Version>"));
+        Assert.Equal(csproj, Match(Read("src/AdbSync.Cli/AdbSync.Cli.csproj"), @"<Version>([^<]+)</Version>"));
+        string v = csproj.Replace("-", "");
         Assert.Equal(v, Match(Read("src/AdbSync.Gui/MainForm.cs"), @"AppVersion = ""([^""]+)"""));
         Assert.Equal(v, Match(Read("src/AdbSync.Cli/Program.cs"), @"AppVersion = ""([^""]+)"""));
         Assert.Equal(v, Match(Read("CHANGELOG.md"), @"(?m)^## v(\S+)"));

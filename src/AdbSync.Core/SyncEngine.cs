@@ -26,7 +26,7 @@ public sealed class SyncEngine
     private readonly object _waitLock = new();
     private Task? _deviceWait;
     private Task? _healthCheck;
-    private int _consecutiveStalls, _failedHealthRounds;
+    private int _consecutiveStalls, _failedHealthRounds, _protocolLogged;
     private Task? _destWait;
     private CancellationTokenSource? _abortCts;
     private volatile string? _abortReason;
@@ -38,6 +38,8 @@ public sealed class SyncEngine
     internal Func<int, TimeSpan> BackoffDelay { get; set; } =
         attempt => TimeSpan.FromSeconds(new[] { 2, 5, 10, 20, 30 }[Math.Clamp(attempt - 1, 0, 4)]);
     internal TimeSpan WatchdogInterval { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>Soglia del diario delle pause: interruzioni del flusso di dati più lunghe vengono registrate nel log.</summary>
+    internal long PauseLogThresholdMs { get; set; } = 500;
     internal TimeSpan? StallTimeoutOverride { get; set; }
     internal TimeSpan ForceCloseDelay { get; set; } = TimeSpan.FromSeconds(5);
     internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
@@ -733,7 +735,12 @@ public sealed class SyncEngine
             {
                 if (DestinationAvailable() && LocalChangedSincePlan(item, finalPath) is { } changedBefore)
                     throw new PermanentCopyException(changedBefore);
-                transfer ??= _device.OpenTransfer();
+                if (transfer is null)
+                {
+                    transfer = _device.OpenTransfer(_o.UseSyncV2);
+                    if (Interlocked.Exchange(ref _protocolLogged, 1) == 0)
+                        _log.Info(L.F("Protocollo di trasferimento ADB: {0}", _o.UseSyncV2 ? "v2" : "v1"));
+                }
                 long received = await PullOnceAsync(transfer, remotePath, tempPath, active, ct);
                 await VerifyAndCommitAsync(item, remotePath, tempPath, finalPath, received, ct);
                 Progress.Active.TryRemove(slot, out _);
@@ -875,11 +882,27 @@ public sealed class SyncEngine
 
         long lastTick = Environment.TickCount64;
         using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // Diario delle pause (diagnosi): ogni interruzione del flusso di dati oltre la soglia viene registrata con
+        // il tempo passato a scrivere su disco, quello passato ad aspettare adb e lo stato del processo.
+        var timed = new TimingStream(fs);
+        var snapshot = ProcessSnapshot.Take();
+        bool firstChunk = true;
         // Task.Run: anche l'apertura della connessione (sincrona nella libreria) ricade sotto il controllo del watchdog.
-        var pull = Task.Run(() => transfer.PullAsync(remotePath, fs, bytes =>
+        var pull = Task.Run(() => transfer.PullAsync(remotePath, timed, bytes =>
         {
+            long now = Environment.TickCount64;
+            long gap = now - Volatile.Read(ref lastTick);
             active.Bytes = bytes;
-            Volatile.Write(ref lastTick, Environment.TickCount64);
+            Volatile.Write(ref lastTick, now);
+            if (!firstChunk && gap >= PauseLogThresholdMs)
+            {
+                var snap = ProcessSnapshot.Take();
+                double writeMs = timed.LastWriteMs;
+                _log.Info(L.F("[diagnosi] pausa di {0} ms su {1} a {2} di {3}: scrittura su disco {4} ms, attesa dati da adb {5} ms; {6}",
+                    gap, active.Path, Format.Bytes(bytes), Format.Bytes(active.Size), (int)writeMs, Math.Max(0, gap - (long)writeMs), snap.DescribeSince(snapshot)));
+                snapshot = snap;
+            }
+            firstChunk = false;
         }, attemptCts.Token));
 
         bool stalled = false, abandoned = false;
@@ -892,6 +915,14 @@ public sealed class SyncEngine
             if (userStop || Environment.TickCount64 - Volatile.Read(ref lastTick) > stallMs)
             {
                 stalled = !userStop;
+                if (stalled)
+                {
+                    double inWrite = timed.WriteInProgressMs;
+                    _log.Info(L.F("[diagnosi] stallo su {0} a {1} di {2} dopo {3} ms senza dati: {4}; {5}",
+                        active.Path, Format.Bytes(active.Bytes), Format.Bytes(active.Size), Environment.TickCount64 - Volatile.Read(ref lastTick),
+                        inWrite > 0 ? L.F("il programma sta scrivendo su disco da {0} ms", (int)inWrite) : L.T("nessuna scrittura su disco in corso: in attesa di dati da adb"),
+                        ProcessSnapshot.Take().DescribeSince(snapshot)));
+                }
                 attemptCts.Cancel();
                 if (await Task.WhenAny(pull, Task.Delay(ForceCloseDelay)) != pull)
                 {

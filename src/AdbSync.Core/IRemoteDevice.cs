@@ -29,8 +29,8 @@ public interface IRemoteDevice
     /// </summary>
     Task<IReadOnlyDictionary<string, string?>> HashBatchAsync(string remoteRoot, IReadOnlyList<string> relativePaths, bool quick, CancellationToken ct);
 
-    /// <summary>Apre un canale di trasferimento (uno per ciascun trasferimento parallelo).</summary>
-    IRemoteTransfer OpenTransfer();
+    /// <summary>Apre un canale di trasferimento (uno per ciascun trasferimento parallelo); useV2 = protocollo ADB v2.</summary>
+    IRemoteTransfer OpenTransfer(bool useV2 = false);
 }
 
 public interface IRemoteTransfer : IDisposable

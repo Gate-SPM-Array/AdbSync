@@ -15,7 +15,11 @@ public class PermanentCopyException(string message, Exception? inner = null) : E
 /// <summary>Errore sul lato PC (scrittura, permessi, spazio).</summary>
 public class LocalIoException(Exception inner) : Exception(inner.Message, inner);
 
-public sealed class StallException(string message) : TransientCopyException(message);
+public class StallException(string message) : TransientCopyException(message);
+/// <summary>Scrittura sul disco del PC ferma oltre il limite: non è colpa del telefono.</summary>
+public sealed class DiskStallException(string message) : StallException(message);
+/// <summary>Copia ricevuta ma non valida (MD5 diverso): il parziale va buttato, non ripreso.</summary>
+public sealed class CorruptCopyException(string message) : TransientCopyException(message);
 
 /// <summary>Esegue confronto e copia con verifica, ritentativi, rilevamento stalli e attesa riconnessione.</summary>
 public sealed class SyncEngine
@@ -46,6 +50,15 @@ public sealed class SyncEngine
     internal TimeSpan? WaitTimeoutOverride { get; set; }
 
     private TimeSpan StallTimeout => StallTimeoutOverride ?? TimeSpan.FromSeconds(Math.Max(1, _o.StallTimeoutSeconds));
+    internal TimeSpan? DiskStallTimeoutOverride { get; set; }
+    /// <summary>Limite per una singola scrittura sul disco del PC (minimo 30 s): separato dallo stallo del telefono.</summary>
+    private TimeSpan DiskStallTimeout => DiskStallTimeoutOverride ?? TimeSpan.FromSeconds(Math.Max(SyncOptions.MinDiskStallSeconds, _o.DiskStallTimeoutSeconds));
+    /// <summary>Oltre questo tempo di scrittura ferma lo stato mostra "disco di destinazione lento".</summary>
+    internal TimeSpan SlowDiskNotice { get; set; } = TimeSpan.FromSeconds(3);
+    /// <summary>Margine tolto dal file parziale prima di riprendere (l'ultima parte potrebbe non essere completa).</summary>
+    internal const long ResumeSafetyMargin = 1 << 20;
+    /// <summary>Solo per i test: avvolge il file di destinazione (es. per simulare un disco lento).</summary>
+    internal Func<Stream, Stream>? DestinationWrapper { get; set; }
     private TimeSpan WaitTimeout => WaitTimeoutOverride ?? TimeSpan.FromSeconds(Math.Max(10, _o.DeviceWaitTimeoutSeconds));
 
     public SyncEngine(IRemoteDevice device, SyncOptions options, SyncLogger log)
@@ -549,6 +562,10 @@ public sealed class SyncEngine
                 : why;
         }
         Progress.Active.Clear();
+        // parziali conservati per la ripresa ma non completati: non si lasciano file a metà sul PC
+        if (DestinationAvailable())
+            foreach (var i in items.Where(i => i.Status != ItemStatus.Done))
+                TryDelete(PathMapper.ToLocalFullPath(plan.LocalRoot, i.LocalRelativePath) + LocalScanner.TempSuffix);
 
         // File "stessa dimensione" da verificare rimasti in sospeso (annullamento o interruzione): mai contati come riusciti.
         int verifyPending = 0;
@@ -730,7 +747,7 @@ public sealed class SyncEngine
             Progress.Active[slot] = active;
             FailureKind kind;
             string message;
-            bool stalled = false;
+            bool stalled = false, diskStall = false, keepPartial = false;
             try
             {
                 if (DestinationAvailable() && LocalChangedSincePlan(item, finalPath) is { } changedBefore)
@@ -741,7 +758,8 @@ public sealed class SyncEngine
                     if (Interlocked.Exchange(ref _protocolLogged, 1) == 0)
                         _log.Info(L.F("Protocollo di trasferimento ADB: {0}", _o.UseSyncV2 ? "v2" : "v1"));
                 }
-                long received = await PullOnceAsync(transfer, remotePath, tempPath, active, ct);
+                long resumeFrom = await ResumePointAsync(item, remotePath, tempPath, ct);
+                long received = await PullOnceAsync(transfer, remotePath, tempPath, active, resumeFrom, ct);
                 await VerifyAndCommitAsync(item, remotePath, tempPath, finalPath, received, ct);
                 Progress.Active.TryRemove(slot, out _);
                 Progress.FileDone(item.RemoteSize);
@@ -763,12 +781,16 @@ public sealed class SyncEngine
             {
                 (kind, message) = Classify(ex);
                 stalled = ex is StallException;
+                diskStall = ex is DiskStallException;
+                // Il parziale si conserva solo se i dati scritti sono buoni (interruzione, non copia sbagliata):
+                // al tentativo successivo non si riscrive ciò che c'è già, e il disco non subisce cancella-e-riscrivi.
+                keepPartial = kind == FailureKind.Transient && ex is not CorruptCopyException && ex is not LocalIoException;
                 if (kind == FailureKind.Transient && ex is not TransientCopyException)
                     _log.Debug($"Dettaglio errore su {item.RelativePath}: {ex}");
             }
 
             Progress.Active.TryRemove(slot, out _);
-            TryDelete(tempPath);
+            if (!keepPartial) TryDelete(tempPath);
             transfer?.Dispose();   // dopo un errore il canale si ricrea sempre da zero
             transfer = null;
 
@@ -806,10 +828,11 @@ public sealed class SyncEngine
             if (stalled)
             {
                 item.AddStall();
-                Progress.AddStall(StallTimeout);
+                Progress.AddStall(diskStall ? DiskStallTimeout : StallTimeout);
             }
             if (kind == FailureKind.Permanent || attempt >= maxAttempts)
             {
+                TryDelete(tempPath);
                 Fail(item, attempt > 1 ? L.F("{0} (dopo {1} tentativi)", message, attempt) : message);
                 return null;
             }
@@ -822,8 +845,11 @@ public sealed class SyncEngine
                 item.Error = message;
                 Progress.RequeueBegin();
                 queue.Enqueue(item);
-                _log.Warn(L.F("Stallo su {0} (tentativo {1}/{2}): rimesso in fondo alla coda.", item.RelativePath, attempt, maxAttempts));
-                if (Interlocked.Increment(ref _consecutiveStalls) >= StallHealthThreshold)
+                _log.Warn(diskStall
+                    ? L.F("Disco di destinazione bloccato durante {0} (tentativo {1}/{2}): rimesso in fondo alla coda.", item.RelativePath, attempt, maxAttempts)
+                    : L.F("Stallo su {0} (tentativo {1}/{2}): rimesso in fondo alla coda.", item.RelativePath, attempt, maxAttempts));
+                // un disco lento non dice nulla sul telefono: non conta per il controllo del collegamento
+                if (!diskStall && Interlocked.Increment(ref _consecutiveStalls) >= StallHealthThreshold)
                 {
                     try { await CheckDeviceAfterStallsAsync(ct); }
                     catch (DeviceUnavailableException dex) { Abort(dex.Message); }
@@ -855,6 +881,29 @@ public sealed class SyncEngine
         }
     }
 
+    /// <summary>
+    /// Punto di ripresa: se è rimasto un parziale del tentativo precedente e il file sul telefono non è cambiato,
+    /// si riparte da lì (meno un margine di sicurezza); altrimenti da zero.
+    /// </summary>
+    private async Task<long> ResumePointAsync(SyncItem item, string remotePath, string tempPath, CancellationToken ct)
+    {
+        long existing;
+        try { existing = File.Exists(tempPath) ? new FileInfo(tempPath).Length : 0; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { existing = 0; }
+        long point = Math.Max(0, existing - ResumeSafetyMargin);
+        if (point <= 0 || item.Remote is null || existing > item.Remote.Size) { if (existing > 0) TryDelete(tempPath); return 0; }
+        var st = await _device.StatAsync(remotePath, ct);
+        if (st is null || st.Value.Size != item.Remote.Size || st.Value.Mtime != item.Remote.MtimeUnix)
+        {
+            _log.Info(L.F("{0}: il file sul telefono è cambiato, il parziale non è riutilizzabile e la copia riparte da zero.", item.RelativePath));
+            TryDelete(tempPath);
+            return 0;
+        }
+        _log.Info(L.F("Ripresa di {0}: {1} già scritti sul PC non vengono riscritti (il telefono li rimanda comunque, il protocollo ADB non permette di partire a metà).",
+            item.RelativePath, Format.Bytes(point)));
+        return point;
+    }
+
     private void Fail(SyncItem item, string message)
     {
         item.Status = ItemStatus.Failed;
@@ -863,7 +912,7 @@ public sealed class SyncEngine
         _log.Error(L.F("NON COPIATO {0}: {1}", item.RelativePath, message));
     }
 
-    private async Task<long> PullOnceAsync(IRemoteTransfer transfer, string remotePath, string tempPath, ActiveTransfer active, CancellationToken ct)
+    private async Task<long> PullOnceAsync(IRemoteTransfer transfer, string remotePath, string tempPath, ActiveTransfer active, long resumeFrom, CancellationToken ct)
     {
         FileStream fs;
         try
@@ -872,8 +921,13 @@ public sealed class SyncEngine
             if (!DestinationAvailable())
                 throw new DirectoryNotFoundException(L.F("cartella di destinazione non trovata: {0}", _localRoot));
             Directory.CreateDirectory(Path.GetDirectoryName(tempPath)!);
-            fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.Read, 1 << 20,
+            fs = new FileStream(tempPath, resumeFrom > 0 ? FileMode.OpenOrCreate : FileMode.Create, FileAccess.Write, FileShare.Read, 1 << 20,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (resumeFrom > 0)
+            {
+                fs.SetLength(resumeFrom);
+                fs.Position = resumeFrom;
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -884,7 +938,9 @@ public sealed class SyncEngine
         using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // Diario delle pause (diagnosi): ogni interruzione del flusso di dati oltre la soglia viene registrata con
         // il tempo passato a scrivere su disco, quello passato ad aspettare adb e lo stato del processo.
-        var timed = new TimingStream(fs);
+        Stream disk = DestinationWrapper?.Invoke(fs) ?? fs;
+        var timed = new TimingStream(resumeFrom > 0 ? new SkipStream(disk, resumeFrom) : disk);
+        long receivedTotal = 0;
         var snapshot = ProcessSnapshot.Take();
         bool firstChunk = true;
         // Task.Run: anche l'apertura della connessione (sincrona nella libreria) ricade sotto il controllo del watchdog.
@@ -893,6 +949,7 @@ public sealed class SyncEngine
             long now = Environment.TickCount64;
             long gap = now - Volatile.Read(ref lastTick);
             active.Bytes = bytes;
+            Volatile.Write(ref receivedTotal, bytes);
             Volatile.Write(ref lastTick, now);
             if (!firstChunk && gap >= PauseLogThresholdMs)
             {
@@ -905,21 +962,42 @@ public sealed class SyncEngine
             firstChunk = false;
         }, attemptCts.Token));
 
-        bool stalled = false, abandoned = false;
+        bool stalled = false, abandoned = false, diskStalled = false;
+        string? slowDiskMessage = null;
         long stallMs = (long)StallTimeout.TotalMilliseconds;
+        long diskStallMs = (long)DiskStallTimeout.TotalMilliseconds;
         while (!pull.IsCompleted)
         {
             await Task.WhenAny(pull, Task.Delay(WatchdogInterval));
             if (pull.IsCompleted) break;
             bool userStop = ct.IsCancellationRequested;
-            if (userStop || Environment.TickCount64 - Volatile.Read(ref lastTick) > stallMs)
+            // Due timeout distinti: mentre il PC sta scrivendo sul disco il cronometro del telefono è fermo
+            // (la scrittura ha un suo limite, molto più lungo); il telefono è "fermo" solo se non si sta scrivendo.
+            double inWrite = timed.WriteInProgressMs;
+            long phoneIdle = inWrite > 0 ? 0 : Environment.TickCount64 - Math.Max(Volatile.Read(ref lastTick), timed.LastWriteEndTick);
+            if (!userStop && inWrite > 0 && inWrite <= diskStallMs)
+            {
+                if (inWrite >= SlowDiskNotice.TotalMilliseconds)
+                {
+                    slowDiskMessage = L.F("Disco di destinazione lento: scrittura ferma da {0:0} s (limite {1:0} s) — attendo senza interrompere la copia.",
+                        inWrite / 1000, DiskStallTimeout.TotalSeconds);
+                    Progress.StatusMessage = slowDiskMessage;
+                }
+                continue;
+            }
+            if (slowDiskMessage is not null && inWrite == 0)
+            {
+                if (Progress.StatusMessage == slowDiskMessage) Progress.StatusMessage = null;
+                slowDiskMessage = null;
+            }
+            if (userStop || inWrite > diskStallMs || phoneIdle > stallMs)
             {
                 stalled = !userStop;
+                diskStalled = !userStop && inWrite > diskStallMs;
                 if (stalled)
                 {
-                    double inWrite = timed.WriteInProgressMs;
                     _log.Info(L.F("[diagnosi] stallo su {0} a {1} di {2} dopo {3} ms senza dati: {4}; {5}",
-                        active.Path, Format.Bytes(active.Bytes), Format.Bytes(active.Size), Environment.TickCount64 - Volatile.Read(ref lastTick),
+                        active.Path, Format.Bytes(active.Bytes), Format.Bytes(active.Size), diskStalled ? (long)inWrite : phoneIdle,
                         inWrite > 0 ? L.F("il programma sta scrivendo su disco da {0} ms", (int)inWrite) : L.T("nessuna scrittura su disco in corso: in attesa di dati da adb"),
                         ProcessSnapshot.Take().DescribeSince(snapshot)));
                 }
@@ -963,10 +1041,16 @@ public sealed class SyncEngine
             try { await fs.DisposeAsync(); } catch { }
         }
 
+        if (slowDiskMessage is not null && Progress.StatusMessage == slowDiskMessage) Progress.StatusMessage = null;
         ct.ThrowIfCancellationRequested();
+        if (diskStalled)
+            throw new DiskStallException(L.F("scrittura sul disco del PC ferma da oltre {0:0} s (disco di destinazione bloccato)", DiskStallTimeout.TotalSeconds));
         if (stalled || abandoned)
             throw new StallException(L.F("nessun dato ricevuto per {0:0} s (trasferimento bloccato)", StallTimeout.TotalSeconds));
         if (pullError is not null) ExceptionDispatchInfo.Throw(pullError);
+        // ripresa: se il telefono ha mandato meno dei byte che avevamo già, il parziale non è coerente
+        if (resumeFrom > 0 && Volatile.Read(ref receivedTotal) < resumeFrom)
+            throw new CorruptCopyException(L.F("ricevuti {0} byte, meno dei {1} già scritti: la copia riparte da zero", Volatile.Read(ref receivedTotal), resumeFrom));
         return length;
     }
 
@@ -1002,7 +1086,7 @@ public sealed class SyncEngine
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new LocalIoException(ex); }
             if (!string.Equals(remoteMd5, localMd5, StringComparison.OrdinalIgnoreCase))
-                throw new TransientCopyException(L.F("MD5 diverso (telefono {0}, PC {1}): copia corrotta", remoteMd5, localMd5));
+                throw new CorruptCopyException(L.F("MD5 diverso (telefono {0}, PC {1}): copia corrotta", remoteMd5, localMd5));
         }
 
         if (LocalChangedSincePlan(item, finalPath) is { } changed)

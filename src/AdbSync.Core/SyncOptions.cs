@@ -40,6 +40,13 @@ public sealed class SyncOptions
     /// </summary>
     public int StallTimeoutSeconds { get; set; } = 30;
 
+    /// <summary>
+    /// Limite per una singola scrittura sul disco del PC (minimo 30 s). Separato dallo stallo del telefono: alcuni SSD
+    /// (es. QLC senza DRAM, quasi pieni) fermano le scritture anche per decine di secondi senza essere guasti.
+    /// </summary>
+    public int DiskStallTimeoutSeconds { get; set; } = 120;
+    public const int MinDiskStallSeconds = 30;
+
     /// <summary>File con stessa dimensione e data diversa ("solo data diversa"): se e come allinearne le date.</summary>
     public DateAlignMode AlignSameSizeDates { get; set; } = DateAlignMode.None;
 

@@ -1,4 +1,4 @@
-# AdbSync v0.1.5D
+# AdbSync v0.1.6
 
 [English](README.md) · **Italiano**
 
@@ -34,7 +34,7 @@ Se la cartella non è scrivibile (es. `C:\Program Files`) il programma ripiega s
 La chiave di autorizzazione adb resta nella posizione standard di Windows (`%USERPROFILE%\.android`).
 Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *adb… → Arresta il server adb*.
 
-> Il pacchetto `AdbSync_v0.1.5D_win-x64.zip` richiede il **.NET 10 Desktop Runtime x64**, che si scarica da https://dotnet.microsoft.com/download/dotnet/10.0
+> Il pacchetto `AdbSync_v0.1.6_win-x64.zip` richiede il **.NET 10 Desktop Runtime x64**, che si scarica da https://dotnet.microsoft.com/download/dotnet/10.0
 
 ## 2. Uso
 
@@ -94,10 +94,16 @@ Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *
   - cartelle: data di modifica del telefono (e creazione uguale), impostata alla fine della copia;
   - file identici già presenti sul PC: le date vengono riallineate senza ricopiare il contenuto.
 - **Cartelle vuote**: vengono ricreate, così la struttura è identica a quella del telefono.
-- **Stalli**: se per *Timeout stallo* secondi (minimo 1, predefinito 30) non arriva alcun byte, il trasferimento viene chiuso. Il file **torna in fondo alla coda, senza attese**, e viene ritentato dopo gli altri.
+- **Stalli**: se per *Timeout stallo telefono* secondi (minimo 1, predefinito 30) il telefono non manda alcun byte, il trasferimento viene chiuso. Il file **torna in fondo alla coda, senza attese**, e viene ritentato dopo gli altri.
   - Un timeout basso con molti tentativi di solito rende di più: un file "incastrato" non blocca mai un trasferimento per tanto tempo.
   - Dopo molti stalli di fila senza alcun file completato (almeno 10, oppure 4 × trasferimenti paralleli), il programma verifica che il telefono risponda. Se il problema continua per 5 controlli di fila, il lavoro si interrompe con un messaggio chiaro invece di girare all'infinito.
   - Nel riepilogo finale e nel log: numero di stalli, tempo perso, file riusciti dopo più tentativi, file **sempre bloccati** (candidati all'esclusione).
+- **Disco di destinazione lento** (timeout separato): il tempo passato a scrivere sul disco del PC non conta mai come stallo del telefono. Alcuni SSD (per esempio i QLC senza DRAM quasi pieni) fermano le scritture per decine di secondi senza essere guasti.
+  - Mentre una scrittura è ferma, lo stato mostra "Disco di destinazione lento…" e la copia aspetta.
+  - Solo una singola scrittura ferma oltre il *Timeout scrittura su disco (PC)* (minimo 30 s, predefinito 120 s, in *Strumenti* → *Timeout scrittura su disco (PC)*; CLI `--disk-stall`) chiude il trasferimento: il file torna in coda e il telefono non viene incolpato.
+- **Ripresa senza riscrivere**: dopo uno stallo o un errore di collegamento il file parziale viene tenuto. Al tentativo successivo il telefono rimanda il file dall'inizio (il protocollo ADB non permette di partire a metà), ma i byte già sul disco del PC, meno un margine di sicurezza di 1 MiB, non vengono riscritti. Il parziale si riusa solo se dimensione e data sul telefono non sono cambiate; una copia corrotta (MD5 diverso) o un errore del disco locale ripartono sempre da zero. I parziali dei file mai completati vengono cancellati alla fine.
+- **Diario di diagnosi** nel log: ogni pausa del flusso di dati oltre 0,5 s (`[diagnosi] pausa`) e ogni stallo (`[diagnosi] stallo`) sono registrati con il tempo passato a scrivere su disco e ad aspettare adb.
+- **Protocollo di trasferimento ADB v2** (quello di `adb pull`): *Strumenti* → *Protocollo di trasferimento ADB v2*, CLI `--v2`. Se il telefono non lo supporta si torna da soli alla v1.
 - **Ritentativi**: fino a *1 + Tentativi extra* volte per file (predefinito 6). Dopo un errore di collegamento si attende in modo crescente (2, 5, 10, 20, 30 s); dopo uno stallo no. Gli errori che non si risolvono ritentando, come un file cancellato dal telefono o un permesso negato, vengono segnalati subito.
 - **Allineamento date dei file "solo data diversa"** (stesso nome, stessa dimensione al byte). Livelli:
   - *No*: non toccati (predefinito);
@@ -131,7 +137,8 @@ Il riquadro *Stato* si ridimensiona trascinando il divisore sopra di esso, e la 
 | Sovrascrivi i conflitti | no | il telefono "vince" anche se il PC è più recente |
 | Verifica MD5 | no | massima garanzia di integrità, ma più lento |
 | Trasferimenti paralleli | 2 | da 2 a 4 aiuta con molti file piccoli (es. WhatsApp) |
-| Timeout stallo | 30 s | minimo 1 s; il file bloccato torna in fondo alla coda |
+| Timeout stallo telefono | 30 s | minimo 1 s; il file bloccato torna in fondo alla coda |
+| Timeout scrittura su disco (PC) (menu *Strumenti*) | 120 s | minimo 30 s; una scrittura su disco più lenta chiude il trasferimento e rimette il file in coda |
 | Tentativi extra | 5 | |
 | Allinea date stessa dimensione | No | No / Solo dimensione / Verifica rapida / Verifica MD5 completa |
 | Modalità diagnostica | no | a ogni confronto salva in `logs\diagnostica_<data>\` l'elenco completo telefono, l'elenco PC, il piano con il motivo di ogni decisione e i messaggi grezzi del telefono |
@@ -178,7 +185,7 @@ src/AdbSync.Core   motore: scansione, confronto, copia robusta (multipiattaforma
 src/AdbSync.Gui    interfaccia Windows Forms
 src/AdbSync.Cli    riga di comando
 lang/              file di traduzione (en.json = riferimento)
-tests/             107 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
+tests/             112 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
 ```
 
 Compilazione: .NET 10 SDK → `dotnet build`. Test: `dotnet test`.

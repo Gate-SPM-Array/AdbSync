@@ -2,6 +2,28 @@
 
 Regola: ogni versione consegnata ha un numero diverso; anche una modifica minima del codice produce una nuova versione con la sua voce qui sotto.
 
+## v0.1.6 — 2026-10-16
+
+Risolve il "loop" dei file grandi (copia che si fermava intorno a 1,8–2,2 GB e ripartiva da zero). La causa, trovata con il diario della 0.1.5D, era il disco di destinazione del PC: alcune scritture restavano ferme da 5 a 55 s, il programma le scambiava per uno stallo del telefono, cancellava il parziale e ricominciava.
+
+### Novità
+- **Due timeout separati.**
+  - *Timeout stallo telefono* (finestra principale, minimo 1 s, predefinito 30): conta solo il tempo in cui il telefono non manda dati.
+  - *Timeout scrittura su disco (PC)* (menu *Strumenti*, minimo 30 s, predefinito 120): quanto può restare ferma una singola scrittura sul disco del PC. CLI: `--disk-stall <secondi>`.
+  - Il tempo di scrittura su disco non conta più come stallo del telefono. Un blocco del disco oltre il suo limite rimette il file in coda senza far scattare il controllo del telefono.
+- **Stato "Disco di destinazione lento"**: dopo 3 s di scrittura ferma lo stato lo dice, con i secondi trascorsi e il limite, e la copia aspetta.
+- **Ripresa senza riscrivere.** Dopo uno stallo o un errore di collegamento il parziale `.adbsync-part` viene tenuto. Al tentativo successivo il telefono rimanda il file dall'inizio (il protocollo ADB non permette di partire a metà), ma i byte già scritti sul PC, meno 1 MiB di margine, non vengono riscritti: il disco lavora molto meno.
+  - Il parziale si riusa solo se dimensione e data sul telefono sono rimaste uguali.
+  - Copia corrotta (MD5 diverso), errore del disco locale o errore definitivo: il parziale viene cancellato e si riparte da zero.
+  - Alla fine della copia i parziali dei file non completati vengono cancellati.
+
+### Diagnosi
+- Il diario delle pause e degli stalli (`[diagnosi] …`) e il protocollo v2 della 0.1.5D restano. Il costo è trascurabile: qualche lettura di contatori per ogni blocco di dati.
+
+### Altro
+- L'etichetta "Timeout stallo (s)" diventa "Timeout stallo telefono (s)". Il minimo di 1 s ora vale anche per il valore salvato nelle impostazioni.
+- Test: 112, di cui 5 nuovi (disco lento entro il limite, disco bloccato oltre il limite, ripresa senza riscrivere, copia corrotta mai ripresa, parziali cancellati).
+
 ## v0.1.5D — 2026-10-16 (diagnosi)
 
 Versione di diagnosi, cioè la 0.1.5 più gli strumenti per capire le pause nei trasferimenti dei file grandi. Il comportamento di copia non cambia.

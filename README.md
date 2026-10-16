@@ -1,4 +1,4 @@
-# AdbSync v0.1.5D
+# AdbSync v0.1.6
 
 **English** · [Italiano](README.it.md)
 
@@ -34,7 +34,7 @@ If the folder is not writable (e.g. `C:\Program Files`) the program falls back t
 The adb authorization key stays in its standard Windows location (`%USERPROFILE%\.android`).
 To move or delete the program folder while adb is running: menu *adb… → Arresta il server adb* (stop the adb server).
 
-> The `AdbSync_v0.1.5D_win-x64.zip` package requires the **.NET 10 Desktop Runtime x64**, available at https://dotnet.microsoft.com/download/dotnet/10.0
+> The `AdbSync_v0.1.6_win-x64.zip` package requires the **.NET 10 Desktop Runtime x64**, available at https://dotnet.microsoft.com/download/dotnet/10.0
 
 ## 2. Usage
 
@@ -94,10 +94,16 @@ To move or delete the program folder while adb is running: menu *adb… → Arre
   - folders: the phone's modification date (and creation set equal), applied at the end of the copy;
   - identical files already on the PC: dates are realigned without copying the content again.
 - **Empty folders** are recreated, so the structure matches the phone's.
-- **Stalls**: if no byte arrives for *stall timeout* seconds (minimum 1, default 30), the transfer is closed. The file **goes back to the end of the queue, without waiting**, and is retried after the others.
+- **Stalls**: if the phone sends no byte for *phone stall timeout* seconds (minimum 1, default 30), the transfer is closed. The file **goes back to the end of the queue, without waiting**, and is retried after the others.
   - A low timeout with many retries usually performs better: a "stuck" file never blocks a transfer slot for long.
   - After many consecutive stalls with no file completed (at least 10, or 4 × parallel transfers), the program checks that the phone responds. If the problem persists for 5 checks in a row, the job stops with a clear message instead of looping forever.
   - The final summary and the log report: number of stalls, time lost, files that succeeded after several attempts, and files that **always stalled** (candidates for exclusion).
+- **Slow destination disk** (separate timeout): time spent writing to the PC disk never counts as a phone stall. Some SSDs (e.g. DRAM-less QLC drives that are nearly full) stop writes for tens of seconds without being faulty.
+  - While a write is stuck, the status shows "Slow destination disk…" and the copy waits.
+  - Only a single write stuck longer than the *PC disk write timeout* (minimum 30 s, default 120 s, in *Strumenti* → *Timeout scrittura su disco (PC)*; CLI `--disk-stall`) closes the transfer; the file goes back to the queue and the phone is not blamed.
+- **Resume without rewriting**: after a stall or a connection error the partial file is kept. On the next attempt the phone sends the file again from the start (the ADB protocol cannot start halfway), but the bytes already on the PC disk, minus a 1 MiB safety margin, are not written again. The partial is reused only if size and date on the phone are unchanged; a corrupted copy (MD5 mismatch) or a local disk error always restarts from zero. Partials of files that never completed are deleted at the end.
+- **Diagnostic diary** in the log: every pause in the data flow over 0.5 s (`[diagnosi] pausa`) and every stall (`[diagnosi] stallo`) is logged with the time spent writing to disk and waiting for adb.
+- **ADB transfer protocol v2** (the one `adb pull` uses): *Strumenti* → *Protocollo di trasferimento ADB v2*, CLI `--v2`. Falls back to v1 by itself if the phone does not support it.
 - **Retries**: up to *1 + extra retries* attempts per file (default 6). After a connection error the wait grows (2, 5, 10, 20, 30 s); after a stall there is no wait. Errors that retrying cannot fix, such as a file deleted from the phone or permission denied, are reported immediately.
 - **Date alignment for "date only" files** (same name, byte-identical size). Levels:
   - *No*: untouched (default);
@@ -131,7 +137,8 @@ The *Stato* (Status) panel can be resized by dragging the splitter above it, and
 | Overwrite conflicts (*Sovrascrivi i conflitti*) | no | the phone "wins" even if the PC file is newer |
 | MD5 verification (*Verifica MD5*) | no | maximum integrity guarantee, but slower |
 | Parallel transfers (*Trasferimenti paralleli*) | 2 | 2 to 4 helps with many small files (e.g. WhatsApp) |
-| Stall timeout (*Timeout stallo*) | 30 s | minimum 1 s; the stuck file goes back to the end of the queue |
+| Phone stall timeout (*Timeout stallo telefono*) | 30 s | minimum 1 s; the stuck file goes back to the end of the queue |
+| PC disk write timeout (*Strumenti* menu) | 120 s | minimum 30 s; a disk write slower than this closes the transfer and requeues the file |
 | Extra retries (*Tentativi extra*) | 5 | |
 | Align same-size dates (*Allinea date stessa dimensione*) | No | No / Size only / Quick check / Full MD5 check |
 | Diagnostic mode (*Modalità diagnostica*) | no | on every compare, saves to `logs\diagnostica_<date>\` the full phone listing, the PC listing, the plan with the reason for every decision, and the raw phone messages |
@@ -177,7 +184,7 @@ src/AdbSync.Core   engine: scan, compare, robust copy (cross-platform)
 src/AdbSync.Gui    Windows Forms user interface
 src/AdbSync.Cli    command line
 lang/              translation files (en.json = reference)
-tests/             107 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
+tests/             112 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
 ```
 
 Build: .NET 10 SDK → `dotnet build`. Tests: `dotnet test`.

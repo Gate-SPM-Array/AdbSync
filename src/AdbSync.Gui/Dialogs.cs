@@ -220,3 +220,34 @@ internal sealed class PostRunDialog : Form
         Controls.Add(root);
     }
 }
+
+/// <summary>Finestra minima per impostare un numero intero.</summary>
+internal sealed class NumberDialog : Form
+{
+    private readonly NumericUpDown _num;
+    public int Value => (int)_num.Value;
+
+    public NumberDialog(string title, string prompt, int value, int min, int max)
+    {
+        Text = title;
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = MinimizeBox = false;
+        ShowInTaskbar = false;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _num = new NumericUpDown { Minimum = min, Maximum = max, Value = Math.Clamp(value, min, max), Width = LogicalToDeviceUnits(90) };
+        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true };
+        var cancel = new Button { Text = L.T("Annulla"), DialogResult = DialogResult.Cancel, AutoSize = true };
+        var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(12), WrapContents = false };
+        root.Controls.Add(new Label { Text = prompt, AutoSize = true, MaximumSize = new Size(LogicalToDeviceUnits(420), 0) });
+        root.Controls.Add(_num);
+        var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true };
+        buttons.Controls.Add(ok);
+        buttons.Controls.Add(cancel);
+        root.Controls.Add(buttons);
+        Controls.Add(root);
+        AcceptButton = ok;
+        CancelButton = cancel;
+    }
+}

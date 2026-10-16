@@ -5,7 +5,7 @@ namespace AdbSync.Cli;
 
 internal static class Program
 {
-    private const string AppVersion = "0.1.5D";
+    private const string AppVersion = "0.1.6";
 
     private static async Task<int> Main(string[] args)
     {
@@ -33,7 +33,8 @@ internal static class Program
               --exclude <modello>        esclusione aggiuntiva (ripetibile), es. --exclude "WhatsApp/Media/.Statuses/"
               --no-default-excludes      non applicare le esclusioni predefinite
               --parallel <1-4>           trasferimenti contemporanei (predefinito 2)
-              --stall <secondi>          timeout di stallo, minimo 1 (predefinito 30): il file bloccato torna in fondo alla coda
+              --stall <secondi>          timeout di stallo del telefono, minimo 1 (predefinito 30): il file bloccato torna in fondo alla coda
+              --disk-stall <secondi>     limite di una scrittura sul disco del PC, minimo 30 (predefinito 120)
               --align-dates <livello>    file con stesso nome e dimensione ma data diversa: allinea la data sul PC
                                          none = no (predefinito) | size = solo dimensione
                                          quick = verifica primi+ultimi 64 KB (MD5) | full = verifica MD5 completo
@@ -252,7 +253,7 @@ internal static class Program
         public DateAlignMode Align = DateAlignMode.None;
         public bool SizeOnly, NoDst, OverwriteConflicts, NoDefaultExcludes, Verify, Yes, List, Diagnostic, SyncV2;
         public List<string> Excludes = new();
-        public int Parallel = 2, Stall = 30, Retries = 5, WaitDevice = 300;
+        public int Parallel = 2, Stall = 30, Retries = 5, WaitDevice = 300, DiskStall = 120;
 
         public static Args Parse(string[] args)
         {
@@ -293,6 +294,10 @@ internal static class Program
                     case "--yes": case "-y": a.Yes = true; break;
                     case "--list": a.List = true; break;
                     case "--v2": a.SyncV2 = true; break;
+                    case "--disk-stall":
+                        a.DiskStall = NextInt();
+                        if (a.DiskStall < SyncOptions.MinDiskStallSeconds) throw new ArgumentException(L.F("--disk-stall deve essere almeno {0}", SyncOptions.MinDiskStallSeconds));
+                        break;
                     case "--lang": Next(); break; // già gestita all'avvio (LanguageFromArgs)
                     default: throw new ArgumentException(L.F("opzione sconosciuta '{0}'", args[i]));
                 }
@@ -315,6 +320,7 @@ internal static class Program
                 Diagnostic = Diagnostic,
                 AlignSameSizeDates = Align,
                 UseSyncV2 = SyncV2,
+                DiskStallTimeoutSeconds = DiskStall,
             };
             if (NoDefaultExcludes) o.ExcludePatterns.Clear();
             o.ExcludePatterns.Add("*" + LocalScanner.TempSuffix);

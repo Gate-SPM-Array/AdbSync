@@ -15,6 +15,8 @@ internal sealed class AppSettings
     public bool OverwriteConflicts { get; set; }
     public int Parallel { get; set; } = 2;
     public int StallSeconds { get; set; } = 30;
+    /// <summary>Limite di una singola scrittura sul disco del PC (minimo 30 s), impostato dal menu Strumenti.</summary>
+    public int DiskStallSeconds { get; set; } = 120;
     public int Retries { get; set; } = 5;
     public int WaitDeviceSeconds { get; set; } = 300;
     public List<string> Excludes { get; set; } = new(SyncOptions.DefaultExcludes);
@@ -64,6 +66,7 @@ internal sealed class AppSettings
             ParallelTransfers = Parallel,
             UseSyncV2 = SyncV2,
             StallTimeoutSeconds = StallSeconds,
+            DiskStallTimeoutSeconds = Math.Max(SyncOptions.MinDiskStallSeconds, DiskStallSeconds),
             MaxRetries = Retries,
             DeviceWaitTimeoutSeconds = WaitDeviceSeconds,
             Diagnostic = Diagnostic,

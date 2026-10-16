@@ -21,7 +21,7 @@ public sealed class FakeRemoteDevice : IRemoteDevice
     public int ChunkSize = 4096;
     public TimeSpan ChunkDelay = TimeSpan.Zero;
 
-    public enum Fault { Stall, HangIgnoringCancel, TransientError, NoSuchFile, Truncate, Corrupt, GoOffline, Pause }
+    public enum Fault { Stall, HangIgnoringCancel, TransientError, NoSuchFile, Truncate, Corrupt, GoOffline, Pause, StallAfterHalf }
     /// <summary>Durata della pausa simulata (Fault.Pause): il flusso si ferma a metà file e poi riprende.</summary>
     public TimeSpan PauseDuration = TimeSpan.FromMilliseconds(800);
 
@@ -182,6 +182,8 @@ public sealed class FakeRemoteDevice : IRemoteDevice
                 progress(sent);
                 if (dev.ChunkDelay > TimeSpan.Zero) await Task.Delay(dev.ChunkDelay, ct);
 
+                if (fault == Fault.StallAfterHalf && off + n >= limit / 2 && off < limit / 2 + dev.ChunkSize)
+                    await Task.Delay(Timeout.Infinite, ct); // si blocca a metà file
                 if (fault == Fault.Pause && off == 0)
                     await Task.Delay(dev.PauseDuration, ct);   // pausa breve e poi riprende
                 if (fault == Fault.Stall && off == 0)

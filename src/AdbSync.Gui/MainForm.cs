@@ -8,7 +8,7 @@ namespace AdbSync.Gui;
 
 internal sealed class MainForm : Form
 {
-    private static readonly string AppVersion = "0.1.5D";
+    private static readonly string AppVersion = "0.1.6";
 
     // --- stato ---
     private readonly IReadOnlyList<string> _migration = Program.MigrationMessages; // eseguita in Program.Main, prima di tutto
@@ -154,7 +154,7 @@ internal sealed class MainForm : Form
         var row2 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         row2.Controls.Add(MakeLabel(L.T("Trasferimenti paralleli:")));
         row2.Controls.Add(_numParallel);
-        row2.Controls.Add(MakeLabel(L.T("Timeout stallo (s):")));
+        row2.Controls.Add(MakeLabel(L.T("Timeout stallo telefono (s):")));
         row2.Controls.Add(_numStall);
         row2.Controls.Add(MakeLabel(L.T("Tentativi extra:")));
         row2.Controls.Add(_numRetries);
@@ -317,6 +317,21 @@ internal sealed class MainForm : Form
         v2.ToolTipText = L.T("Prova: usa la stessa versione del protocollo di \"adb pull\". Se il telefono non la supporta si torna da soli alla v1.");
         v2.CheckedChanged += (_, _) => { _settings.SyncV2 = v2.Checked; _settings.Save(); _log.Info(L.F("Protocollo di trasferimento ADB impostato: {0}", v2.Checked ? "v2" : "v1")); };
         tools.DropDownItems.Add(v2);
+        var disk = new ToolStripMenuItem(DiskStallMenuText());
+        disk.ToolTipText = L.T("Quanto può restare ferma una singola scrittura sul disco del PC prima di considerarla un blocco. Separato dal timeout di stallo del telefono: alcuni SSD fermano le scritture anche per decine di secondi senza essere guasti.");
+        disk.Click += (_, _) =>
+        {
+            if (_busy) return;
+            using var dlg = new NumberDialog(L.T("Timeout scrittura su disco (PC)"),
+                L.F("Secondi di attesa massima per una singola scrittura sul disco di destinazione (minimo {0}).", SyncOptions.MinDiskStallSeconds),
+                _settings.DiskStallSeconds, SyncOptions.MinDiskStallSeconds, 3600);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            _settings.DiskStallSeconds = dlg.Value;
+            _settings.Save();
+            disk.Text = DiskStallMenuText();
+            _log.Info(L.F("Timeout scrittura su disco (PC) impostato: {0} s", dlg.Value));
+        };
+        tools.DropDownItems.Add(disk);
         tools.DropDownItems.Add(new ToolStripSeparator());
         tools.DropDownItems.AddRange(AdbMenuItems());
 
@@ -347,6 +362,8 @@ internal sealed class MainForm : Form
 
         _menu.Items.AddRange(new ToolStripItem[] { file, tools, lang, help });
     }
+
+    private string DiskStallMenuText() => L.F("Timeout scrittura su disco (PC): {0} s...", _settings.DiskStallSeconds);
 
     /// <summary>Voce di menu che apre un indirizzo preso da adbsync.ini; senza indirizzo la voce è disattivata.</summary>
     private void AddLink(ToolStripMenuItem parent, string text, string key, Keys shortcut = Keys.None)
@@ -425,7 +442,7 @@ internal sealed class MainForm : Form
         _chkVerify.Checked = _settings.VerifyHash;
         _chkOverwrite.Checked = _settings.OverwriteConflicts;
         _numParallel.Value = Math.Clamp(_settings.Parallel, 1, 4);
-        _numStall.Value = Math.Clamp(_settings.StallSeconds, 5, 600);
+        _numStall.Value = Math.Clamp(_settings.StallSeconds, 1, 600);
         _numRetries.Value = Math.Clamp(_settings.Retries, 0, 20);
         _chkDetailedLog.Checked = _settings.ShowDetailedLog;
         _chkDiagnostic.Checked = _settings.Diagnostic;

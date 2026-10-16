@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>adbsync-cli</AssemblyName>
     <RootNamespace>AdbSync.Cli</RootNamespace>
-    <Version>0.1.5-D</Version>
+    <Version>0.1.6</Version>
     <Product>AdbSync</Product>
     <Company>DGR – ICT GRC Consulting</Company>
     <InvariantGlobalization>false</InvariantGlobalization>

@@ -10,13 +10,16 @@ public sealed record DeviceInfo(string Serial, string Model, string State, bool 
     public override string ToString() =>
         IsOnline ? $"{Model} ({Serial})" : $"{Model} ({Serial}) — {StateLabel}";
 
+    /// <summary>Nome per log e report: modello e solo le ultime 4 cifre del numero di serie.</summary>
+    public string LogName => $"{Model} (…{LogSessions.SerialSuffix(Serial)})";
+
     public string StateLabel => State switch
     {
-        "Online" => "connesso",
-        "Unauthorized" => "NON AUTORIZZATO: conferma il debug USB sul telefono",
-        "Offline" => "offline",
-        "Authorizing" => "in autorizzazione",
-        "NoPermissions" => "permessi insufficienti",
+        "Online" => L.T("connesso"),
+        "Unauthorized" => L.T("NON AUTORIZZATO: conferma il debug USB sul telefono"),
+        "Offline" => L.T("offline"),
+        "Authorizing" => L.T("in autorizzazione"),
+        "NoPermissions" => L.T("permessi insufficienti"),
         _ => State,
     };
 }
@@ -74,13 +77,13 @@ public sealed class AdbEnvironment
         Directory.CreateDirectory(baseDir);
         string zip = Path.Combine(baseDir, "platform-tools.zip");
 
-        status?.Report("Download di " + url);
+        status?.Report(L.F("Download di {0}", url));
         using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
         await using (var src = await http.GetStreamAsync(url, ct))
         await using (var dst = File.Create(zip))
             await src.CopyToAsync(dst, ct);
 
-        status?.Report("Estrazione...");
+        status?.Report(L.T("Estrazione..."));
         string existing = Path.Combine(PrivatePlatformToolsDir, AdbExeName);
         if (File.Exists(existing)) KillServer(existing); // adb in esecuzione blocca i file da sostituire
         if (Directory.Exists(PrivatePlatformToolsDir)) Directory.Delete(PrivatePlatformToolsDir, recursive: true);
@@ -88,10 +91,10 @@ public sealed class AdbEnvironment
         File.Delete(zip);
 
         string adb = Path.Combine(PrivatePlatformToolsDir, AdbExeName);
-        if (!File.Exists(adb)) throw new FileNotFoundException("adb non trovato nello zip scaricato", adb);
+        if (!File.Exists(adb)) throw new FileNotFoundException(L.T("adb non trovato nello zip scaricato"), adb);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(adb, File.GetUnixFileMode(adb) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute);
-        status?.Report("platform-tools installate in " + PrivatePlatformToolsDir);
+        status?.Report(L.F("platform-tools installate in {0}", PrivatePlatformToolsDir));
         return adb;
     }
 
@@ -111,7 +114,7 @@ public sealed class AdbEnvironment
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new InvalidOperationException($"Impossibile avviare il server adb ({AdbPath}): {ex.Message}", ex);
+            throw new InvalidOperationException(L.F("Impossibile avviare il server adb ({0}): {1}", AdbPath, ex.Message), ex);
         }
     }
 
@@ -146,7 +149,7 @@ public sealed class AdbEnvironment
     internal static DeviceInfo ToInfo(DeviceData d)
     {
         string model = !string.IsNullOrWhiteSpace(d.Model) ? d.Model.Replace('_', ' ')
-                     : !string.IsNullOrWhiteSpace(d.Product) ? d.Product : "Dispositivo";
+                     : !string.IsNullOrWhiteSpace(d.Product) ? d.Product : L.T("Dispositivo");
         return new DeviceInfo(d.Serial, model, d.State.ToString(), d.State == DeviceState.Online);
     }
 

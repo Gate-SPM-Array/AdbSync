@@ -14,7 +14,7 @@ public sealed class PathFilter
 {
     private readonly List<Rule> _rules = new();
 
-    private sealed record Rule(Regex Regex, bool DirOnly, bool Anchored);
+    private sealed record Rule(Regex Regex, bool DirOnly, bool Anchored, string Pattern);
 
     public PathFilter(IEnumerable<string>? patterns)
     {
@@ -29,31 +29,34 @@ public sealed class PathFilter
             bool anchored = p.Contains('/');
             // Cartella ancorata alla radice: deve essere un prefisso del percorso del file.
             string rx = anchored && dirOnly ? "^" + GlobToRegex(p) + "/" : "^" + GlobToRegex(p) + "$";
-            _rules.Add(new Rule(new Regex(rx, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled), dirOnly, anchored));
+            _rules.Add(new Rule(new Regex(rx, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled), dirOnly, anchored, raw.Trim()));
         }
     }
 
     public bool IsEmpty => _rules.Count == 0;
 
-    public bool IsExcluded(string relativePath)
+    public bool IsExcluded(string relativePath) => Match(relativePath) is not null;
+
+    /// <summary>Restituisce la regola (così come è stata scritta) che esclude il percorso, oppure null.</summary>
+    public string? Match(string relativePath)
     {
-        if (_rules.Count == 0) return false;
+        if (_rules.Count == 0) return null;
         var segments = relativePath.Split('/');
         string fileName = segments[^1];
         foreach (var r in _rules)
         {
             if (r.Anchored)
             {
-                if (r.Regex.IsMatch(relativePath)) return true;
+                if (r.Regex.IsMatch(relativePath)) return r.Pattern;
             }
             else if (r.DirOnly)
             {
                 for (int i = 0; i < segments.Length - 1; i++)
-                    if (r.Regex.IsMatch(segments[i])) return true;
+                    if (r.Regex.IsMatch(segments[i])) return r.Pattern;
             }
-            else if (r.Regex.IsMatch(fileName)) return true;
+            else if (r.Regex.IsMatch(fileName)) return r.Pattern;
         }
-        return false;
+        return null;
     }
 
     private static string GlobToRegex(string glob)

@@ -15,10 +15,18 @@ public class PermanentCopyException(string message, Exception? inner = null) : E
 /// <summary>Errore sul lato PC (scrittura, permessi, spazio).</summary>
 public class LocalIoException(Exception inner) : Exception(inner.Message, inner);
 
-public sealed class StallException(string message) : TransientCopyException(message);
+public class StallException(string message) : TransientCopyException(message);
+/// <summary>Scrittura sul disco del PC ferma oltre il limite: non è colpa del telefono.</summary>
+public sealed class DiskStallException(string message) : StallException(message);
+/// <summary>Copia ricevuta ma non valida (MD5 diverso): il parziale va buttato, non ripreso.</summary>
+public sealed class CorruptCopyException(string message, bool md5Mismatch = false) : TransientCopyException(message)
+{
+    /// <summary>Vero se la copia è stata scartata perché l'MD5 non coincideva con quello del telefono.</summary>
+    public bool Md5Mismatch { get; } = md5Mismatch;
+}
 
 /// <summary>Esegue confronto e copia con verifica, ritentativi, rilevamento stalli e attesa riconnessione.</summary>
-public sealed class SyncEngine
+public sealed partial class SyncEngine
 {
     private readonly IRemoteDevice _device;
     private readonly SyncOptions _o;
@@ -26,11 +34,33 @@ public sealed class SyncEngine
     private readonly object _waitLock = new();
     private Task? _deviceWait;
     private Task? _healthCheck;
-    private int _consecutiveStalls, _failedHealthRounds;
+    private int _consecutiveStalls, _failedHealthRounds, _protocolLogged;
     private Task? _destWait;
     private CancellationTokenSource? _abortCts;
     private volatile string? _abortReason;
     private string _localRoot = "";
+    /// <summary>MD5 dei file verificati in questa esecuzione (solo quelli: nessun costo per gli altri file).</summary>
+    /// <summary>16 byte per file verificato (non stringhe): a 1.000.000 di file resta nell'ordine di 30 MB.</summary>
+    private readonly Dictionary<SyncItem, UInt128> _md5 = new();
+    /// <summary>File con almeno una copia scartata per MD5 diverso.</summary>
+    private readonly ConcurrentDictionary<SyncItem, byte> _corruptItems = new();
+
+    private void RecordMd5(SyncItem item, string hex)
+    {
+        var v = System.Buffers.Binary.BinaryPrimitives.ReadUInt128BigEndian(Convert.FromHexString(hex));
+        lock (_md5) _md5[item] = v;
+    }
+
+    private bool HasMd5(SyncItem item) { lock (_md5) return _md5.ContainsKey(item); }
+
+    private string Md5Text(SyncItem item)
+    {
+        UInt128 v;
+        lock (_md5) if (!_md5.TryGetValue(item, out v)) return "";
+        Span<byte> b = stackalloc byte[16];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt128BigEndian(b, v);
+        return Convert.ToHexStringLower(b);
+    }
 
     public SyncProgress Progress { get; } = new();
 
@@ -38,12 +68,23 @@ public sealed class SyncEngine
     internal Func<int, TimeSpan> BackoffDelay { get; set; } =
         attempt => TimeSpan.FromSeconds(new[] { 2, 5, 10, 20, 30 }[Math.Clamp(attempt - 1, 0, 4)]);
     internal TimeSpan WatchdogInterval { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>Soglia del diario delle pause: interruzioni del flusso di dati più lunghe vengono registrate nel log.</summary>
+    internal long PauseLogThresholdMs { get; set; } = 500;
     internal TimeSpan? StallTimeoutOverride { get; set; }
     internal TimeSpan ForceCloseDelay { get; set; } = TimeSpan.FromSeconds(5);
     internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
     internal TimeSpan? WaitTimeoutOverride { get; set; }
 
     private TimeSpan StallTimeout => StallTimeoutOverride ?? TimeSpan.FromSeconds(Math.Max(1, _o.StallTimeoutSeconds));
+    internal TimeSpan? DiskStallTimeoutOverride { get; set; }
+    /// <summary>Limite per una singola scrittura sul disco del PC (minimo 30 s): separato dallo stallo del telefono.</summary>
+    private TimeSpan DiskStallTimeout => DiskStallTimeoutOverride ?? TimeSpan.FromSeconds(Math.Max(SyncOptions.MinDiskStallSeconds, _o.DiskStallTimeoutSeconds));
+    /// <summary>Oltre questo tempo di scrittura ferma lo stato mostra "disco di destinazione lento".</summary>
+    internal TimeSpan SlowDiskNotice { get; set; } = TimeSpan.FromSeconds(3);
+    /// <summary>Margine tolto dal file parziale prima di riprendere (l'ultima parte potrebbe non essere completa).</summary>
+    internal const long ResumeSafetyMargin = 1 << 20;
+    /// <summary>Solo per i test: avvolge il file di destinazione (es. per simulare un disco lento).</summary>
+    internal Func<Stream, Stream>? DestinationWrapper { get; set; }
     private TimeSpan WaitTimeout => WaitTimeoutOverride ?? TimeSpan.FromSeconds(Math.Max(10, _o.DeviceWaitTimeoutSeconds));
 
     public SyncEngine(IRemoteDevice device, SyncOptions options, SyncLogger log)
@@ -71,12 +112,14 @@ public sealed class SyncEngine
         if (writeDiagnostics && options.Diagnostic)
             Diagnostics.WriteCompare(log.LogDirectory, session.RemoteRoot, session.LocalRoot, session.Remote, session.Local, plan, log);
         log.Info(DescribePlan(plan));
-        int sanitized = plan.Items.Count(i => i.NameWasSanitized);
-        if (sanitized > 0) log.Warn($"{sanitized} nomi contengono caratteri non ammessi da Windows: verranno salvati con caratteri sostitutivi equivalenti.");
+        foreach (var g in plan.Items.Where(i => i.Category == ItemCategory.Excluded).GroupBy(i => i.ExcludedBy).OrderByDescending(g => g.Count()))
+            log.Info(L.F("Esclusi dalla regola \"{0}\": {1} file (visibili con il filtro Esclusi; si modificano con Esclusioni…).", g.Key, Format.Number(g.Count())));
+        int sanitized = plan.Items.Count(i => i.NameWasSanitized && i.Category != ItemCategory.Excluded);
+        if (sanitized > 0) log.Warn(L.F("{0} nomi contengono caratteri non ammessi da Windows: verranno salvati con caratteri sostitutivi equivalenti.", sanitized));
         foreach (var c in plan.Items.Where(i => i.Category is ItemCategory.Collision or ItemCategory.Blocked).Take(20))
-            log.Warn($"File NON copiabile: {c.RelativePath} — {c.Error}");
+            log.Warn(L.F("File NON copiabile: {0} — {1}", c.RelativePath, c.Error));
         if (plan.NotCopiable > 0)
-            log.Warn($"Attenzione: {plan.NotCopiable} elementi del telefono non potranno essere copiati (permesso negato, collisioni, bloccati).");
+            log.Warn(L.F("Attenzione: {0} elementi del telefono non potranno essere copiati (permesso negato, collisioni, bloccati).", plan.NotCopiable));
         return plan;
     }
 
@@ -88,10 +131,10 @@ public sealed class SyncEngine
         remoteRoot = NormalizeRemoteRoot(remoteRoot);
         EnsureLocalDriveAvailable(localRoot);
         var sw = Stopwatch.StartNew();
-        log.Info($"Confronto: telefono {device.DisplayName}:{remoteRoot}  →  PC {localRoot}");
+        log.Info(L.F("Confronto: telefono {0}:{1}  →  PC {2}", device.DisplayName, remoteRoot, localRoot));
 
         int remoteCount = 0, localCount = 0;
-        void Report() => status?.Invoke($"Scansione in corso — telefono: {Format.Number(remoteCount)} elementi · PC: {Format.Number(localCount)} file");
+        void Report() => status?.Invoke(L.F("Scansione in corso — telefono: {0} elementi · PC: {1} file", Format.Number(remoteCount), Format.Number(localCount)));
 
         var remoteTask = device.ScanAsync(remoteRoot, n => { remoteCount = n; Report(); }, ct);
         var localTask = Task.Run(() => LocalScanner.Scan(localRoot, n => { localCount = n; Report(); }, ct), ct);
@@ -100,37 +143,41 @@ public sealed class SyncEngine
         var remote = remoteTask.Result;
         var local = localTask.Result;
         if (remote.RootNotFound)
-            throw new DirectoryNotFoundException($"La cartella \"{remoteRoot}\" non esiste sul telefono o non è accessibile.");
+            throw new DirectoryNotFoundException(L.F("La cartella \"{0}\" non esiste sul telefono o non è accessibile.", remoteRoot));
 
-        log.Info($"Scansione completata in {Format.Duration(sw.Elapsed)}: telefono {Format.Number(remote.Files.Count)} file e " +
-                 $"{Format.Number(Math.Max(0, remote.Directories.Count - 1))} cartelle (verifica: trovati {Format.Number(remote.FoundEntries)}, " +
-                 $"dichiarati {Format.Number(remote.DeclaredEntries)}, ricevuti {Format.Number(remote.ReceivedEntries)}); " +
-                 $"PC {Format.Number(local.Files.Count)} file e {Format.Number(Math.Max(0, local.Directories.Count - 1))} cartelle.");
+        log.Info(L.F("Scansione completata in {0}: telefono {1} file e " +
+                     "{2} cartelle (verifica: trovati {3}, " +
+                     "dichiarati {4}, ricevuti {5}); " +
+                     "PC {6} file e {7} cartelle.",
+                     Format.Duration(sw.Elapsed), Format.Number(remote.Files.Count),
+                     Format.Number(Math.Max(0, remote.Directories.Count - 1)), Format.Number(remote.FoundEntries),
+                     Format.Number(remote.DeclaredEntries), Format.Number(remote.ReceivedEntries),
+                     Format.Number(local.Files.Count), Format.Number(Math.Max(0, local.Directories.Count - 1))));
         if (local.ReparseDirectories.Count > 0)
-            log.Warn($"Sul PC {local.ReparseDirectories.Count} cartelle sono collegamenti (junction/symlink): non vengono attraversate né modificate.");
+            log.Warn(L.F("Sul PC {0} cartelle sono collegamenti (junction/symlink): non vengono attraversate né modificate.", local.ReparseDirectories.Count));
         if (remote.UsedMergedOutput)
-            log.Warn("La cartella temporanea del telefono (/data/local/tmp) non è scrivibile: usata la lettura in tre passate (più lenta).");
+            log.Warn(L.T("La cartella temporanea del telefono (/data/local/tmp) non è scrivibile: usata la lettura in tre passate (più lenta)."));
         if (remote.SymbolicLinks.Count > 0)
         {
-            log.Warn($"{remote.SymbolicLinks.Count} link simbolici sul telefono non vengono seguiti né copiati.");
-            foreach (var l in remote.SymbolicLinks.Take(10)) log.Warn("  link: " + l);
+            log.Warn(L.F("{0} link simbolici sul telefono non vengono seguiti né copiati.", remote.SymbolicLinks.Count));
+            foreach (var l in remote.SymbolicLinks.Take(10)) log.Warn(L.F("  link: {0}", l));
         }
         if (remote.PermissionDenied.Count > 0)
         {
-            log.Warn($"Android non permette di leggere {remote.PermissionDenied.Count} elementi (normale per Android/data e Android/obb): non verranno copiati.");
-            foreach (var p in remote.PermissionDenied.Take(20)) log.Warn("  permesso negato: " + p);
-            if (remote.PermissionDenied.Count > 20) log.Warn($"  ... e altri {remote.PermissionDenied.Count - 20} (elenco completo con la modalità diagnostica).");
+            log.Warn(L.F("Android non permette di leggere {0} elementi (normale per Android/data e Android/obb): non verranno copiati.", remote.PermissionDenied.Count));
+            foreach (var p in remote.PermissionDenied.Take(20)) log.Warn(L.F("  permesso negato: {0}", p));
+            if (remote.PermissionDenied.Count > 20) log.Warn(L.F("  ... e altri {0} (elenco completo con la modalità diagnostica).", remote.PermissionDenied.Count - 20));
         }
-        foreach (var v in remote.Vanished.Take(20)) log.Warn("File sparito dal telefono durante la scansione: " + v);
+        foreach (var v in remote.Vanished.Take(20)) log.Warn(L.F("File sparito dal telefono durante la scansione: {0}", v));
 
         if (remote.Problems.Count > 0)
         {
             if (options.Diagnostic) Diagnostics.WriteCompare(log.LogDirectory, remoteRoot, localRoot, remote, local, null, log);
-            foreach (var p in remote.Problems) log.Error("Scansione del telefono INCOMPLETA: " + p);
-            throw new IncompleteScanException(
+            foreach (var p in remote.Problems) log.Error(L.F("Scansione del telefono INCOMPLETA: {0}", p));
+            throw new IncompleteScanException(L.F(
                 "La scansione del telefono è INCOMPLETA, quindi il confronto è stato fermato per non darti un risultato sbagliato.\n\n" +
-                string.Join("\n", remote.Problems.Select(p => "• " + p)) +
-                "\n\nRiprova; se si ripete, attiva la modalità diagnostica e invia la cartella dei log.");
+                "{0}\n\nRiprova; se si ripete, attiva la modalità diagnostica e invia la cartella dei log.",
+                string.Join("\n", remote.Problems.Select(p => "• " + p))));
         }
 
         return new ComparisonSession
@@ -147,16 +194,22 @@ public sealed class SyncEngine
     {
         string? drive = Path.GetPathRoot(Path.GetFullPath(localRoot));
         if (string.IsNullOrEmpty(drive) || !Directory.Exists(drive))
-            throw new DestinationUnavailableException($"L'unità {drive} non è disponibile: collega il disco di destinazione e riprova.");
+            throw new DestinationUnavailableException(L.F("L'unità {0} non è disponibile: collega il disco di destinazione e riprova.", drive));
     }
 
     public static string DescribePlan(SyncPlan p) =>
-        $"Risultato confronto: {p.Count(ItemCategory.New)} nuovi, {p.Count(ItemCategory.Changed)} modificati, " +
-        $"{p.Count(ItemCategory.Conflict)} conflitti, {p.Count(ItemCategory.DateOnly)} solo data diversa, " +
-        $"{p.Count(ItemCategory.Identical)} identici, {p.Count(ItemCategory.OnlyOnPc)} solo sul PC, " +
-        $"{p.Count(ItemCategory.Collision)} collisioni, {p.ExcludedCount} esclusi. " +
-        $"Elementi: telefono {Format.Number(p.RemoteFileCount)} file + {Format.Number(p.RemoteDirCount)} cartelle, " +
-        $"PC {Format.Number(p.LocalFileCount)} file + {Format.Number(p.LocalDirCount)} cartelle. Da fare: {p.WorkSummary}.";
+        L.F("Risultato confronto: {0} nuovi, {1} modificati, " +
+            "{2} conflitti, {3} solo data diversa, " +
+            "{4} identici, {5} solo sul PC, " +
+            "{6} collisioni, esclusi dalle regole {7} del telefono e {8} solo sul PC. " +
+            "Elementi: telefono {9} file + {10} cartelle, " +
+            "PC {11} file + {12} cartelle. Da fare: {13}.",
+            p.Count(ItemCategory.New), p.Count(ItemCategory.Changed),
+            p.Count(ItemCategory.Conflict), p.Count(ItemCategory.DateOnly),
+            p.Count(ItemCategory.Identical), p.Count(ItemCategory.OnlyOnPc),
+            p.Count(ItemCategory.Collision), p.ExcludedCount, p.ExcludedLocalCount,
+            Format.Number(p.RemoteFileCount), Format.Number(p.RemoteDirCount),
+            Format.Number(p.LocalFileCount), Format.Number(p.LocalDirCount), p.WorkSummary);
 
     public static string NormalizeRemoteRoot(string root)
     {
@@ -177,7 +230,7 @@ public sealed class SyncEngine
         Progress.TotalFiles = items.Count;
         Progress.TotalBytes = items.Sum(i => i.RemoteSize);
         Progress.StartedAt = DateTime.UtcNow;
-        Progress.Phase = "Preparazione";
+        Progress.Phase = L.T("Preparazione");
         _abortCts = CancellationTokenSource.CreateLinkedTokenSource(userCt);
         var ct = _abortCts.Token;
         var metaErrors = new List<string>();
@@ -185,14 +238,14 @@ public sealed class SyncEngine
 
         if (!plan.HasWork)
         {
-            _log.Info("Niente da fare: la cartella sul PC è già allineata.");
+            _log.Info(L.T("Niente da fare: la cartella sul PC è già allineata."));
             return Finish(plan, items, sw, userCt, null, 0, 0, metaErrors);
         }
 
         foreach (var t in plan.StaleTempFiles)
         {
-            try { File.Delete(t); _log.Info("Rimosso file temporaneo rimasto da un'esecuzione interrotta: " + t); }
-            catch (Exception ex) { _log.Warn($"Impossibile rimuovere il temporaneo {t}: {ex.Message}"); }
+            try { File.Delete(t); _log.Info(L.F("Rimosso file temporaneo rimasto da un'esecuzione interrotta: {0}", t)); }
+            catch (Exception ex) { _log.Warn(L.F("Impossibile rimuovere il temporaneo {0}: {1}", t, ex.Message)); }
         }
 
         try
@@ -202,18 +255,18 @@ public sealed class SyncEngine
             var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(plan.LocalRoot))!);
             long needed = Progress.TotalBytes;
             if (needed > 0 && drive.IsReady && drive.AvailableFreeSpace < needed)
-                return Finish(plan, items, sw, userCt, $"spazio insufficiente su {drive.Name}: servono {Format.Bytes(needed)}, disponibili {Format.Bytes(drive.AvailableFreeSpace)}.", 0, 0, metaErrors);
+                return Finish(plan, items, sw, userCt, L.F("spazio insufficiente su {0}: servono {1}, disponibili {2}.", drive.Name, Format.Bytes(needed), Format.Bytes(drive.AvailableFreeSpace)), 0, 0, metaErrors);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or DestinationUnavailableException)
         {
-            return Finish(plan, items, sw, userCt, "cartella di destinazione non utilizzabile: " + ex.Message, 0, 0, metaErrors);
+            return Finish(plan, items, sw, userCt, L.F("cartella di destinazione non utilizzabile: {0}", ex.Message), 0, 0, metaErrors);
         }
 
         // 1) cartelle mancanti (anche quelle vuote sul telefono)
         var toCreate = plan.Directories.Where(d => d.NeedsCreate && !d.IsRoot).OrderBy(d => d.Depth).ToList();
         if (toCreate.Count > 0)
         {
-            Progress.Phase = "Creazione cartelle";
+            Progress.Phase = L.T("Creazione cartelle");
             foreach (var d in toCreate)
             {
                 if (ct.IsCancellationRequested) break;
@@ -226,20 +279,22 @@ public sealed class SyncEngine
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     d.Error = ex.Message;
-                    metaErrors.Add($"cartella non creata: {d.LocalRelativePath} — {ex.Message}");
-                    _log.Error($"Cartella non creata: {d.LocalRelativePath} — {ex.Message}");
+                    metaErrors.Add(L.F("cartella non creata: {0} — {1}", d.LocalRelativePath, ex.Message));
+                    _log.Error(L.F("Cartella non creata: {0} — {1}", d.LocalRelativePath, ex.Message));
                 }
             }
-            if (dirsCreated > 0) _log.Info($"Create {dirsCreated} cartelle.");
+            if (dirsCreated > 0) _log.Info(L.F("Create {0} cartelle.", dirsCreated));
         }
 
         // 2) copia dei file
         if (items.Count > 0 && !ct.IsCancellationRequested)
         {
             int parallel = Math.Min(_o.ClampedParallel, items.Count);
-            _log.Info($"Inizio copia: {Format.Number(items.Count)} file, {Format.Bytes(Progress.TotalBytes)}, {parallel} trasferimenti paralleli, " +
-                      $"timeout stallo {StallTimeout.TotalSeconds:0} s, tentativi {1 + _o.MaxRetries}{(_o.VerifyHash ? ", verifica MD5" : "")}.");
-            Progress.Phase = "Copia";
+            _log.Info(L.F("Inizio copia: {0} file, {1}, {2} trasferimenti paralleli, " +
+                          "timeout stallo {3:0} s, tentativi {4}{5}.",
+                          Format.Number(items.Count), Format.Bytes(Progress.TotalBytes), parallel,
+                          StallTimeout.TotalSeconds, 1 + _o.MaxRetries, _o.VerifyHash ? L.T(", verifica MD5") : ""));
+            Progress.Phase = L.T("Copia");
             var queue = new ConcurrentQueue<SyncItem>(items);
             var workers = Enumerable.Range(1, parallel)
                 .Select(slot => Task.Run(() => WorkerAsync(slot, queue, plan, ct)))
@@ -251,7 +306,7 @@ public sealed class SyncEngine
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                Abort("errore imprevisto: " + ex.Message);
+                Abort(L.F("errore imprevisto: {0}", ex.Message));
                 _log.Error(ex.ToString());
             }
         }
@@ -260,7 +315,7 @@ public sealed class SyncEngine
         int verifiedAligned = 0;
         if (!userCt.IsCancellationRequested && DestinationAvailable())
         {
-            Progress.Phase = "Allineamento date";
+            Progress.Phase = L.T("Allineamento date");
             timesFixed = AlignFileTimes(plan, metaErrors);
             if (plan.CountToVerify > 0 && _abortReason is null)
             {
@@ -273,19 +328,19 @@ public sealed class SyncEngine
                 catch (DeviceUnavailableException dex) { Abort(dex.Message); }
                 catch (Exception ex)
                 {
-                    Abort("errore imprevisto durante la verifica: " + ex.Message);
+                    Abort(L.F("errore imprevisto durante la verifica: {0}", ex.Message));
                     _log.Error(ex.ToString());
                 }
             }
             if (!userCt.IsCancellationRequested && DestinationAvailable())
             {
-                Progress.Phase = "Allineamento date cartelle";
+                Progress.Phase = L.T("Allineamento date cartelle");
                 timesFixed += AlignDirTimes(plan, metaErrors);
             }
         }
         else if (!userCt.IsCancellationRequested)
         {
-            _log.Warn("Date non allineate: la destinazione non è disponibile.");
+            _log.Warn(L.T("Date non allineate: la destinazione non è disponibile."));
         }
 
         return Finish(plan, items, sw, userCt, _abortReason, dirsCreated, timesFixed, metaErrors, verifiedAligned);
@@ -299,67 +354,35 @@ public sealed class SyncEngine
     {
         bool quick = _o.AlignSameSizeDates == DateAlignMode.Quick;
         var todo = plan.Items.Where(i => i.Action == ItemAction.VerifyAndFixTimes && i.Remote is not null && i.Status != ItemStatus.Done).ToList();
-        string kind = quick ? "verifica rapida (testa e coda)" : "verifica MD5 completa";
-        _log.Info($"Verifica e allineamento date: {Format.Number(todo.Count)} file con stessa dimensione, {kind}.");
+        string kind = quick ? L.T("verifica rapida (testa e coda)") : L.T("verifica MD5 completa");
+        _log.Info(L.F("Verifica e allineamento date: {0} file con stessa dimensione, {1}.", Format.Number(todo.Count), kind));
         int aligned = 0, differs = 0, done = 0;
         foreach (var batch in HashBatches(todo, quick))
         {
             ct.ThrowIfCancellationRequested();
-            Progress.Phase = $"Verifica e allineamento date: {Format.Number(done)} di {Format.Number(todo.Count)}";
-            IReadOnlyDictionary<string, string?> remoteHashes;
-            for (int attempt = 1; ; attempt++)
-            {
-                try
-                {
-                    remoteHashes = await _device.HashBatchAsync(plan.RemoteRoot, batch.Select(i => i.RelativePath).ToList(), quick, ct);
-                    break;
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (DeviceUnavailableException) { throw; }
-                catch (Exception ex) when (attempt < 3)
-                {
-                    _log.Warn($"Calcolo hash sul telefono non riuscito ({ex.Message}): riprovo.");
-                    await Task.Delay(BackoffDelay(attempt), ct);
-                    await EnsureDeviceAsync(ct);
-                }
-                catch (Exception ex)
-                {
-                    // Blocco non verificabile: i suoi file restano com'erano (date non toccate) e sono segnalati; si prosegue.
-                    _log.Error($"Calcolo hash sul telefono non riuscito dopo 3 tentativi ({ex.Message}): {batch.Count} file non verificati.");
-                    remoteHashes = new Dictionary<string, string?>();
-                    break;
-                }
-            }
-
-            // hash locali in parallelo (il disco del PC è il limite, non la CPU)
-            var localHashes = new ConcurrentDictionary<SyncItem, string?>();
-            await Parallel.ForEachAsync(batch, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (i, token) =>
-            {
-                string path = PathMapper.ToLocalFullPath(plan.LocalRoot, i.LocalRelativePath);
-                localHashes[i] = await LocalHash(path, quick, token);
-            });
+            Progress.Phase = L.F("Verifica e allineamento date: {0} di {1}", Format.Number(done), Format.Number(todo.Count));
+            var remoteHashes = await RemoteHashesAsync(plan.RemoteRoot, batch, quick, ct);
+            var localHashes = await LocalHashesAsync(plan.LocalRoot, batch, quick, ct);
 
             foreach (var i in batch)
             {
                 done++;
                 string path = PathMapper.ToLocalFullPath(plan.LocalRoot, i.LocalRelativePath);
-                remoteHashes.TryGetValue(i.RelativePath, out var rh);
+                string? rh = ValidRemoteHash(remoteHashes, i, quick);
                 localHashes.TryGetValue(i, out var lh);
-                // MD5 di "niente" per un file non vuoto = lettura fallita (shell senza pipefail): non è un confronto valido.
-                if (rh == EmptyMd5 && (quick ? Math.Min(i.RemoteSize, 2L * QuickHashWindow) : i.RemoteSize) > 0) rh = null;
                 if (string.IsNullOrEmpty(rh) || string.IsNullOrEmpty(lh))
                 {
                     i.Status = ItemStatus.Failed;
-                    i.Error = "verifica non eseguita: " + (string.IsNullOrEmpty(rh) ? "file non leggibile sul telefono" : "file non leggibile sul PC");
+                    i.Error = L.F("verifica non eseguita: {0}", string.IsNullOrEmpty(rh) ? L.T("file non leggibile sul telefono") : L.T("file non leggibile sul PC"));
                     errors.Add($"{i.LocalRelativePath} — {i.Error}");
                     continue;
                 }
                 if (!string.Equals(rh, lh, StringComparison.OrdinalIgnoreCase))
                 {
                     i.Status = ItemStatus.ContentDiffers;
-                    i.Error = $"contenuto DIVERSO dal telefono ({kind}): date non modificate";
+                    i.Error = L.F("contenuto DIVERSO dal telefono ({0}): date non modificate", kind);
                     differs++;
-                    _log.Warn($"Contenuto diverso, date non toccate: {i.LocalRelativePath}");
+                    _log.Warn(L.F("Contenuto diverso, date non toccate: {0}", i.LocalRelativePath));
                     continue;
                 }
                 try
@@ -367,24 +390,73 @@ public sealed class SyncEngine
                     if (LocalChangedSincePlan(i, path) is { } changed)
                     {
                         i.Status = ItemStatus.Failed;
-                        i.Error = "date non allineate: " + changed;
+                        i.Error = L.F("date non allineate: {0}", changed);
                         errors.Add($"{i.LocalRelativePath} — {i.Error}");
                         continue;
                     }
                     SetFileTimes(path, i.Remote!.MtimeUtc, i.Remote.MtimeUnix);
                     i.Status = ItemStatus.Done;
+                    if (!quick) RecordMd5(i, lh);
                     aligned++;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
                 {
                     i.Status = ItemStatus.Failed;
-                    i.Error = "date non impostate: " + ex.Message;
+                    i.Error = L.F("date non impostate: {0}", ex.Message);
                     errors.Add($"{i.LocalRelativePath} — {i.Error}");
                 }
             }
         }
-        _log.Info($"Verifica completata: {Format.Number(aligned)} file identici con date allineate, {Format.Number(differs)} con contenuto diverso (non toccati).");
+        _log.Info(L.F("Verifica completata: {0} file identici con date allineate, {1} con contenuto diverso (non toccati).", Format.Number(aligned), Format.Number(differs)));
         return aligned;
+    }
+
+    /// <summary>
+    /// Hash di un blocco calcolati sul telefono con un solo comando (3 tentativi). Se il blocco resta non verificabile
+    /// restituisce un elenco vuoto: i suoi file risultano "non verificati", mai "uguali".
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string?>> RemoteHashesAsync(string remoteRoot, List<SyncItem> batch, bool quick, CancellationToken ct)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await _device.HashBatchAsync(remoteRoot, batch.Select(i => i.RelativePath).ToList(), quick, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (DeviceUnavailableException) { throw; }
+            catch (Exception ex) when (attempt < 3)
+            {
+                _log.Warn(L.F("Calcolo hash sul telefono non riuscito ({0}): riprovo.", ex.Message));
+                await Task.Delay(BackoffDelay(attempt), ct);
+                await EnsureDeviceAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _log.Error(L.F("Calcolo hash sul telefono non riuscito dopo 3 tentativi ({0}): {1} file non verificati.", ex.Message, batch.Count));
+                return new Dictionary<string, string?>();
+            }
+        }
+    }
+
+    /// <summary>Hash locali in parallelo (il disco del PC è il limite, non la CPU).</summary>
+    private static async Task<ConcurrentDictionary<SyncItem, string?>> LocalHashesAsync(string localRoot, List<SyncItem> batch, bool quick, CancellationToken ct)
+    {
+        var localHashes = new ConcurrentDictionary<SyncItem, string?>();
+        await Parallel.ForEachAsync(batch, new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct }, async (i, token) =>
+        {
+            localHashes[i] = await LocalHash(PathMapper.ToLocalFullPath(localRoot, i.LocalRelativePath), quick, token);
+        });
+        return localHashes;
+    }
+
+    /// <summary>Hash del telefono per l'elemento, null se assente o non valido.</summary>
+    private static string? ValidRemoteHash(IReadOnlyDictionary<string, string?> remoteHashes, SyncItem i, bool quick)
+    {
+        remoteHashes.TryGetValue(i.RelativePath, out var rh);
+        // MD5 di "niente" per un file non vuoto = lettura fallita (shell senza pipefail): non è un confronto valido.
+        if (rh == EmptyMd5 && (quick ? Math.Min(i.RemoteSize, 2L * QuickHashWindow) : i.RemoteSize) > 0) return null;
+        return string.IsNullOrEmpty(rh) ? null : rh;
     }
 
     /// <summary>Blocchi da al massimo 200 file e ~16 KB di percorsi: un solo comando sul telefono per blocco.</summary>
@@ -451,8 +523,8 @@ public sealed class SyncEngine
                 if (LocalChangedSincePlan(i, path) is { } changed)
                 {
                     i.Status = ItemStatus.Failed;
-                    i.Error = "date non allineate: " + changed;
-                    errors.Add($"date non allineate: {i.LocalRelativePath} — {changed}");
+                    i.Error = L.F("date non allineate: {0}", changed);
+                    errors.Add(L.F("date non allineate: {0} — {1}", i.LocalRelativePath, changed));
                     continue;
                 }
                 SetFileTimes(path, i.Remote!.MtimeUtc, i.Remote.MtimeUnix);
@@ -462,8 +534,8 @@ public sealed class SyncEngine
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
             {
                 i.Status = ItemStatus.Failed;
-                i.Error = "date non impostate: " + ex.Message;
-                errors.Add($"date non impostate: {i.LocalRelativePath} — {ex.Message}");
+                i.Error = L.F("date non impostate: {0}", ex.Message);
+                errors.Add(L.F("date non impostate: {0} — {1}", i.LocalRelativePath, ex.Message));
             }
         }
 
@@ -495,7 +567,7 @@ public sealed class SyncEngine
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
             {
                 d.Error = ex.Message;
-                errors.Add($"date cartella non impostate: {(d.IsRoot ? plan.LocalRoot : d.LocalRelativePath)} — {ex.Message}");
+                errors.Add(L.F("date cartella non impostate: {0} — {1}", d.IsRoot ? plan.LocalRoot : d.LocalRelativePath, ex.Message));
             }
         }
         foreach (var e in errors.Skip(firstError).Take(50)) _log.Error(e);
@@ -527,33 +599,42 @@ public sealed class SyncEngine
         {
             string last = i.Error is { Length: > 0 } e ? e : "";
             i.Status = ItemStatus.NotProcessed;
-            string why = cancelled ? "Annullato" : "Non elaborato (lavoro interrotto)";
+            string why = cancelled ? L.T("Annullato") : L.T("Non elaborato (lavoro interrotto)");
             i.Error = i.Attempts > 0 && last.Length > 0
-                ? $"{why} durante il tentativo {i.Attempts} — ultimo errore: {last}"
+                ? L.F("{0} durante il tentativo {1} — ultimo errore: {2}", why, i.Attempts, last)
                 : why;
         }
         Progress.Active.Clear();
+        // parziali conservati per la ripresa ma non completati: non si lasciano file a metà sul PC
+        if (DestinationAvailable())
+            foreach (var i in items.Where(i => i.Status != ItemStatus.Done))
+                TryDelete(PathMapper.ToLocalFullPath(plan.LocalRoot, i.LocalRelativePath) + LocalScanner.TempSuffix);
 
         // File "stessa dimensione" da verificare rimasti in sospeso (annullamento o interruzione): mai contati come riusciti.
         int verifyPending = 0;
         foreach (var i in plan.Items.Where(i => i.Action == ItemAction.VerifyAndFixTimes && i.Status is ItemStatus.Pending))
         {
             i.Status = ItemStatus.NotProcessed;
-            i.Error = cancelled ? "Annullato: contenuto non verificato, date non toccate" : "Non elaborato (lavoro interrotto): contenuto non verificato, date non toccate";
+            i.Error = cancelled ? L.T("Annullato: contenuto non verificato, date non toccate") : L.T("Non elaborato (lavoro interrotto): contenuto non verificato, date non toccate");
             verifyPending++;
         }
         if (verifyPending > 0)
-            metaErrors.Add($"{Format.Number(verifyPending)} file con stessa dimensione NON verificati ({(cancelled ? "annullato" : "lavoro interrotto")}): date non toccate.");
+            metaErrors.Add(L.F("{0} file con stessa dimensione NON verificati ({1}): date non toccate.", Format.Number(verifyPending), cancelled ? L.T("annullato") : L.T("lavoro interrotto")));
 
+        int unreadable = items.Count(i => i.Status == ItemStatus.Unreadable);
         var result = new SyncResult
         {
+            Unreadable = unreadable,
+            Md5Enabled = _o.VerifyHash,
+            Md5Verified = items.Count(i => i.Status == ItemStatus.Done && HasMd5(i)),
+            CorruptRedone = _corruptItems.Count,
             Copied = items.Count(i => i.Status == ItemStatus.Done),
             Failed = items.Count(i => i.Status == ItemStatus.Failed),
             NotProcessed = items.Count(i => i.Status == ItemStatus.NotProcessed),
             BytesCopied = items.Where(i => i.Status == ItemStatus.Done).Sum(i => i.RemoteSize),
             DirsCreated = dirsCreated,
             TimesFixed = timesFixed,
-            NotCopiable = plan.NotCopiable,
+            NotCopiable = plan.NotCopiable + unreadable,
             DatesVerifiedAligned = verifiedAligned,
             ContentDiffers = plan.Items.Count(i => i.Status == ItemStatus.ContentDiffers),
             Stalls = Progress.Stalls,
@@ -567,22 +648,79 @@ public sealed class SyncEngine
             AbortReason = cancelled ? null : abortReason,
             FailedItems = items.Where(i => i.Status is ItemStatus.Failed).ToList(),
         };
-        Progress.Phase = result.FullySucceeded ? "Completato" : cancelled ? "Annullato" : result.AbortReason is not null ? "Interrotto" : "Completato con errori";
+        Progress.Phase = result.FullySucceeded ? L.T("Completato") : cancelled ? L.T("Annullato") : result.AbortReason is not null ? L.T("Interrotto") : L.T("Completato con errori");
         Progress.StatusMessage = null;
         Progress.FinishedAt = DateTime.UtcNow;
 
         result.ReportPath = WriteReport(plan, result);
+        (result.RenamedLogPath, result.RenamedCount) = WriteRenamedLog(plan);
         _log.Write(result.FullySucceeded ? LogLevel.Info : LogLevel.Error, result.Summary);
-        foreach (var f in result.FailedItems.Take(200)) _log.Error($"  non copiato: {f.RelativePath} — {f.Error}");
+        foreach (var f in result.FailedItems.Take(200)) _log.Error(L.F("  non copiato: {0} — {1}", f.RelativePath, f.Error));
         if (result.Stalls > 0)
         {
-            _log.Info($"Statistiche stalli: {result.Stalls} stalli, circa {Format.Duration(result.StallTimeLost)} di attesa; " +
-                      $"{result.RecoveredAfterRetry} file riusciti dopo più tentativi; {result.AlwaysStalled.Count} file bloccati a ogni tentativo.");
-            foreach (var p in result.AlwaysStalled.Take(100)) _log.Warn("  sempre bloccato (candidato all'esclusione): " + p);
+            _log.Info(L.F("Statistiche stalli: {0} stalli, circa {1} di attesa; " +
+                          "{2} file riusciti dopo più tentativi; {3} file bloccati a ogni tentativo.",
+                          result.Stalls, Format.Duration(result.StallTimeLost), result.RecoveredAfterRetry, result.AlwaysStalled.Count));
+            foreach (var p in result.AlwaysStalled.Take(100)) _log.Warn(L.F("  sempre bloccato (candidato all'esclusione): {0}", p));
         }
-        if (result.ReportPath is not null) _log.Info("Report dettagliato: " + result.ReportPath);
+        if (result.ReportPath is not null) _log.Info(L.F("Report dettagliato: {0}", result.ReportPath));
+        if (result.RenamedLogPath is not null)
+            _log.Info(L.F("Nomi convertiti per Windows: {0} — elenco nome originale → nome sul PC: {1}", Format.Number(result.RenamedCount), result.RenamedLogPath));
         return result;
     }
+
+    /// <summary>
+    /// Elenco testuale dei nomi convertiti (caratteri non ammessi da Windows/exFAT/NTFS): percorso originale sul telefono,
+    /// percorso salvato sul PC ed esito. Scritto a ogni sincronizzazione che ne contiene, anche senza modalità diagnostica.
+    /// </summary>
+    private (string? Path, int Count) WriteRenamedLog(SyncPlan plan)
+    {
+        var dirs = plan.Directories.Where(d => !d.IsRoot && d.RelativePath != d.LocalRelativePath).ToList();
+        var files = plan.Items.Where(i => i.NameWasSanitized && i.Remote is not null).ToList();
+        if (dirs.Count + files.Count == 0 || _log.LogDirectory is null) return (null, 0);
+        try
+        {
+            string path = Path.Combine(_log.LogDirectory, $"nomi_convertiti_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+            using var w = new StreamWriter(path, false, new UTF8Encoding(true));
+            w.WriteLine(L.T("AdbSync — nomi convertiti perché non ammessi su Windows (exFAT/NTFS)"));
+            w.WriteLine(L.F("Telefono: {0}", plan.RemoteRoot));
+            w.WriteLine(L.F("PC:       {0}", plan.LocalRoot));
+            w.WriteLine(L.T("I caratteri non ammessi da Windows sono sostituiti con caratteri Unicode quasi identici a vista (es. ? → ？ a larghezza piena, punto finale → ．): il nome resta leggibile e la conversione è sempre la stessa, così la copia incrementale li riconosce."));
+            w.WriteLine(L.T("Colonne (separate da TAB): tipo, percorso sul telefono, percorso sul PC, esito, sostituzioni"));
+            w.WriteLine();
+            foreach (var d in dirs)
+                w.WriteLine(string.Join('\t', L.T("cartella"), d.RelativePath, d.LocalRelativePath.Replace('/', '\\'),
+                    d.Error is not null ? L.F("errore: {0}", d.Error) : d.Created ? L.T("creata") : L.T("presente"),
+                    PathMapper.DescribeChanges(d.RelativePath, d.LocalRelativePath)));
+            foreach (var i in files)
+                w.WriteLine(string.Join('\t', L.T("file"), i.RelativePath, i.LocalRelativePath.Replace('/', '\\'), RenamedOutcome(i),
+                    PathMapper.DescribeChanges(i.RelativePath, i.LocalRelativePath)));
+            return (path, dirs.Count + files.Count);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn(L.F("Impossibile scrivere l'elenco dei nomi convertiti: {0}", ex.Message));
+            return (null, 0);
+        }
+    }
+
+    private static string RenamedOutcome(SyncItem i) => i.Status switch
+    {
+        ItemStatus.Done when i.Action == ItemAction.Copy => L.T("copiato"),
+        ItemStatus.Done => L.T("già presente, date allineate"),
+        ItemStatus.Failed => L.F("NON copiato: {0}", i.Error),
+        ItemStatus.NotProcessed => L.F("NON copiato: {0}", i.Error),
+        ItemStatus.ContentDiffers => L.F("contenuto diverso: {0}", i.Error),
+        ItemStatus.Unreadable => L.F("NON copiabile: {0}", i.Error),
+        _ => i.Category switch
+        {
+            ItemCategory.Identical => L.T("già presente"),
+            ItemCategory.Excluded => L.F("escluso dalla regola {0}", i.ExcludedBy),
+            ItemCategory.Collision or ItemCategory.Blocked => L.F("NON copiabile: {0}", i.Error),
+            ItemCategory.Conflict or ItemCategory.DateOnly => L.T("presente sul PC, non toccato"),
+            _ => i.Action == ItemAction.Skip ? L.T("non copiato (scelta manuale)") : L.T("non elaborato"),
+        },
+    };
 
     private string? WriteReport(SyncPlan plan, SyncResult result)
     {
@@ -591,14 +729,14 @@ public sealed class SyncEngine
         {
             string path = Path.Combine(_log.LogDirectory, $"report_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
             using var w = new StreamWriter(path, false, new UTF8Encoding(true));
-            w.WriteLine("Oggetto;Percorso telefono;Percorso PC;Categoria;Azione;Esito;Tentativi;Dimensione;Errore");
+            w.WriteLine("Oggetto;Percorso telefono;Percorso PC;Categoria;Azione;Esito;Tentativi;Dimensione;Errore;MD5");
             foreach (var d in plan.Directories.Where(d => d.NeedsCreate || d.Error is not null))
                 w.WriteLine(string.Join(';', "cartella", Csv(d.RelativePath), Csv(d.LocalRelativePath), "", d.NeedsCreate ? "crea" : "allinea date",
                     d.Error is null ? "Done" : "Failed", "", "", Csv(d.Error ?? "")));
             foreach (var i in plan.Items.Where(i => i.Action != ItemAction.Skip || i.Error is not null))
             {
                 w.WriteLine(string.Join(';', "file", Csv(i.RelativePath), Csv(i.LocalRelativePath), i.Category, i.Action,
-                    i.Status, i.Attempts, i.RemoteSize, Csv(i.Error ?? "")));
+                    i.Status, i.Attempts, i.RemoteSize, Csv(i.Error ?? ""), Md5Text(i)));
             }
             w.WriteLine();
             w.WriteLine(Csv(result.Summary));
@@ -606,18 +744,19 @@ public sealed class SyncEngine
         }
         catch (Exception ex)
         {
-            _log.Warn("Impossibile scrivere il report: " + ex.Message);
+            _log.Warn(L.F("Impossibile scrivere il report: {0}", ex.Message));
             return null;
         }
 
-        static string Csv(string s) => s.IndexOfAny(new[] { ';', '"', '\n', '\r' }) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
     }
+
+    private static string Csv(string s) => s.IndexOfAny(new[] { ';', '"', '\n', '\r' }) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
 
     private void Abort(string reason)
     {
         if (_abortReason is not null) return;
         _abortReason = reason;
-        _log.Error("Interruzione del lavoro: " + reason);
+        _log.Error(L.F("Interruzione del lavoro: {0}", reason));
         try { _abortCts?.Cancel(); } catch { }
     }
 
@@ -639,7 +778,7 @@ public sealed class SyncEngine
         }
     }
 
-    private enum FailureKind { Transient, Permanent, Fatal }
+    private enum FailureKind { Transient, Permanent, Fatal, Unreadable }
 
     private async Task<IRemoteTransfer?> CopyItemAsync(int slot, SyncItem item, SyncPlan plan, IRemoteTransfer? transfer,
         ConcurrentQueue<SyncItem> queue, CancellationToken ct)
@@ -658,13 +797,19 @@ public sealed class SyncEngine
             Progress.Active[slot] = active;
             FailureKind kind;
             string message;
-            bool stalled = false;
+            bool stalled = false, diskStall = false, keepPartial = false;
             try
             {
                 if (DestinationAvailable() && LocalChangedSincePlan(item, finalPath) is { } changedBefore)
                     throw new PermanentCopyException(changedBefore);
-                transfer ??= _device.OpenTransfer();
-                long received = await PullOnceAsync(transfer, remotePath, tempPath, active, ct);
+                if (transfer is null)
+                {
+                    transfer = _device.OpenTransfer(_o.UseSyncV2);
+                    if (Interlocked.Exchange(ref _protocolLogged, 1) == 0)
+                        _log.Info(L.F("Protocollo di trasferimento ADB: {0}", _o.UseSyncV2 ? "v2" : "v1"));
+                }
+                long resumeFrom = await ResumePointAsync(item, remotePath, tempPath, ct);
+                long received = await PullOnceAsync(transfer, remotePath, tempPath, active, resumeFrom, ct);
                 await VerifyAndCommitAsync(item, remotePath, tempPath, finalPath, received, ct);
                 Progress.Active.TryRemove(slot, out _);
                 Progress.FileDone(item.RemoteSize);
@@ -686,12 +831,17 @@ public sealed class SyncEngine
             {
                 (kind, message) = Classify(ex);
                 stalled = ex is StallException;
+                diskStall = ex is DiskStallException;
+                // Il parziale si conserva solo se i dati scritti sono buoni (interruzione, non copia sbagliata):
+                // al tentativo successivo non si riscrive ciò che c'è già, e il disco non subisce cancella-e-riscrivi.
+                keepPartial = kind == FailureKind.Transient && ex is not CorruptCopyException && ex is not LocalIoException;
+                if (ex is CorruptCopyException { Md5Mismatch: true }) _corruptItems.TryAdd(item, 0);
                 if (kind == FailureKind.Transient && ex is not TransientCopyException)
                     _log.Debug($"Dettaglio errore su {item.RelativePath}: {ex}");
             }
 
             Progress.Active.TryRemove(slot, out _);
-            TryDelete(tempPath);
+            if (!keepPartial) TryDelete(tempPath);
             transfer?.Dispose();   // dopo un errore il canale si ricrea sempre da zero
             transfer = null;
 
@@ -729,11 +879,22 @@ public sealed class SyncEngine
             if (stalled)
             {
                 item.AddStall();
-                Progress.AddStall(StallTimeout);
+                Progress.AddStall(diskStall ? DiskStallTimeout : StallTimeout);
+            }
+            if (kind == FailureKind.Unreadable)
+            {
+                // Android non lo lascia leggere (tipicamente Android/data): non copiabile, non è un errore della copia.
+                TryDelete(tempPath);
+                item.Status = ItemStatus.Unreadable;
+                item.Error = L.T("Android non permette di leggere questo file (permesso negato): non copiabile");
+                Progress.FileFailed(item.RemoteSize);
+                _log.Warn(L.F("Non leggibile sul telefono (permesso negato): {0}", item.RelativePath));
+                return null;
             }
             if (kind == FailureKind.Permanent || attempt >= maxAttempts)
             {
-                Fail(item, attempt > 1 ? $"{message} (dopo {attempt} tentativi)" : message);
+                TryDelete(tempPath);
+                Fail(item, attempt > 1 ? L.F("{0} (dopo {1} tentativi)", message, attempt) : message);
                 return null;
             }
 
@@ -745,8 +906,11 @@ public sealed class SyncEngine
                 item.Error = message;
                 Progress.RequeueBegin();
                 queue.Enqueue(item);
-                _log.Warn($"Stallo su {item.RelativePath} (tentativo {attempt}/{maxAttempts}): rimesso in fondo alla coda.");
-                if (Interlocked.Increment(ref _consecutiveStalls) >= StallHealthThreshold)
+                _log.Warn(diskStall
+                    ? L.F("Disco di destinazione bloccato durante {0} (tentativo {1}/{2}): rimesso in fondo alla coda.", item.RelativePath, attempt, maxAttempts)
+                    : L.F("Stallo su {0} (tentativo {1}/{2}): rimesso in fondo alla coda.", item.RelativePath, attempt, maxAttempts));
+                // un disco lento non dice nulla sul telefono: non conta per il controllo del collegamento
+                if (!diskStall && Interlocked.Increment(ref _consecutiveStalls) >= StallHealthThreshold)
                 {
                     try { await CheckDeviceAfterStallsAsync(ct); }
                     catch (DeviceUnavailableException dex) { Abort(dex.Message); }
@@ -757,7 +921,7 @@ public sealed class SyncEngine
             item.Status = ItemStatus.Retrying;
             item.Error = message;
             var delay = BackoffDelay(attempt);
-            _log.Warn($"Tentativo {attempt}/{maxAttempts} fallito per {item.RelativePath}: {message} — riprovo tra {delay.TotalSeconds:0} s");
+            _log.Warn(L.F("Tentativo {0}/{1} fallito per {2}: {3} — riprovo tra {4:0} s", attempt, maxAttempts, item.RelativePath, message, delay.TotalSeconds));
             Progress.RetryBegin();
             try
             {
@@ -778,25 +942,53 @@ public sealed class SyncEngine
         }
     }
 
+    /// <summary>
+    /// Punto di ripresa: se è rimasto un parziale del tentativo precedente e il file sul telefono non è cambiato,
+    /// si riparte da lì (meno un margine di sicurezza); altrimenti da zero.
+    /// </summary>
+    private async Task<long> ResumePointAsync(SyncItem item, string remotePath, string tempPath, CancellationToken ct)
+    {
+        long existing;
+        try { existing = File.Exists(tempPath) ? new FileInfo(tempPath).Length : 0; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { existing = 0; }
+        long point = Math.Max(0, existing - ResumeSafetyMargin);
+        if (point <= 0 || item.Remote is null || existing > item.Remote.Size) { if (existing > 0) TryDelete(tempPath); return 0; }
+        var st = await _device.StatAsync(remotePath, ct);
+        if (st is null || st.Value.Size != item.Remote.Size || st.Value.Mtime != item.Remote.MtimeUnix)
+        {
+            _log.Info(L.F("{0}: il file sul telefono è cambiato, il parziale non è riutilizzabile e la copia riparte da zero.", item.RelativePath));
+            TryDelete(tempPath);
+            return 0;
+        }
+        _log.Info(L.F("Ripresa di {0}: {1} già scritti sul PC non vengono riscritti (il telefono li rimanda comunque, il protocollo ADB non permette di partire a metà).",
+            item.RelativePath, Format.Bytes(point)));
+        return point;
+    }
+
     private void Fail(SyncItem item, string message)
     {
         item.Status = ItemStatus.Failed;
         item.Error = message;
         Progress.FileFailed(item.RemoteSize);
-        _log.Error($"NON COPIATO {item.RelativePath}: {message}");
+        _log.Error(L.F("NON COPIATO {0}: {1}", item.RelativePath, message));
     }
 
-    private async Task<long> PullOnceAsync(IRemoteTransfer transfer, string remotePath, string tempPath, ActiveTransfer active, CancellationToken ct)
+    private async Task<long> PullOnceAsync(IRemoteTransfer transfer, string remotePath, string tempPath, ActiveTransfer active, long resumeFrom, CancellationToken ct)
     {
         FileStream fs;
         try
         {
             // Se manca la cartella di destinazione (disco staccato) non va ricreata: si segnala e si attende.
             if (!DestinationAvailable())
-                throw new DirectoryNotFoundException($"cartella di destinazione non trovata: {_localRoot}");
+                throw new DirectoryNotFoundException(L.F("cartella di destinazione non trovata: {0}", _localRoot));
             Directory.CreateDirectory(Path.GetDirectoryName(tempPath)!);
-            fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.Read, 1 << 20,
+            fs = new FileStream(tempPath, resumeFrom > 0 ? FileMode.OpenOrCreate : FileMode.Create, FileAccess.Write, FileShare.Read, 1 << 20,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
+            if (resumeFrom > 0)
+            {
+                fs.SetLength(resumeFrom);
+                fs.Position = resumeFrom;
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -805,23 +997,71 @@ public sealed class SyncEngine
 
         long lastTick = Environment.TickCount64;
         using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // Diario delle pause (diagnosi): ogni interruzione del flusso di dati oltre la soglia viene registrata con
+        // il tempo passato a scrivere su disco, quello passato ad aspettare adb e lo stato del processo.
+        Stream disk = DestinationWrapper?.Invoke(fs) ?? fs;
+        var timed = new TimingStream(resumeFrom > 0 ? new SkipStream(disk, resumeFrom) : disk);
+        long receivedTotal = 0;
+        var snapshot = ProcessSnapshot.Take();
+        bool firstChunk = true;
         // Task.Run: anche l'apertura della connessione (sincrona nella libreria) ricade sotto il controllo del watchdog.
-        var pull = Task.Run(() => transfer.PullAsync(remotePath, fs, bytes =>
+        var pull = Task.Run(() => transfer.PullAsync(remotePath, timed, bytes =>
         {
+            long now = Environment.TickCount64;
+            long gap = now - Volatile.Read(ref lastTick);
             active.Bytes = bytes;
-            Volatile.Write(ref lastTick, Environment.TickCount64);
+            Volatile.Write(ref receivedTotal, bytes);
+            Volatile.Write(ref lastTick, now);
+            if (!firstChunk && gap >= PauseLogThresholdMs)
+            {
+                var snap = ProcessSnapshot.Take();
+                double writeMs = timed.LastWriteMs;
+                _log.Info(L.F("[diagnosi] pausa di {0} ms su {1} a {2} di {3}: scrittura su disco {4} ms, attesa dati da adb {5} ms; {6}",
+                    gap, active.Path, Format.Bytes(bytes), Format.Bytes(active.Size), (int)writeMs, Math.Max(0, gap - (long)writeMs), snap.DescribeSince(snapshot)));
+                snapshot = snap;
+            }
+            firstChunk = false;
         }, attemptCts.Token));
 
-        bool stalled = false, abandoned = false;
+        bool stalled = false, abandoned = false, diskStalled = false;
+        string? slowDiskMessage = null;
         long stallMs = (long)StallTimeout.TotalMilliseconds;
+        long diskStallMs = (long)DiskStallTimeout.TotalMilliseconds;
         while (!pull.IsCompleted)
         {
             await Task.WhenAny(pull, Task.Delay(WatchdogInterval));
             if (pull.IsCompleted) break;
             bool userStop = ct.IsCancellationRequested;
-            if (userStop || Environment.TickCount64 - Volatile.Read(ref lastTick) > stallMs)
+            // Due timeout distinti: mentre il PC sta scrivendo sul disco il cronometro del telefono è fermo
+            // (la scrittura ha un suo limite, molto più lungo); il telefono è "fermo" solo se non si sta scrivendo.
+            double inWrite = timed.WriteInProgressMs;
+            long phoneIdle = inWrite > 0 ? 0 : Environment.TickCount64 - Math.Max(Volatile.Read(ref lastTick), timed.LastWriteEndTick);
+            if (!userStop && inWrite > 0 && inWrite <= diskStallMs)
+            {
+                if (inWrite >= SlowDiskNotice.TotalMilliseconds)
+                {
+                    slowDiskMessage = L.F("Disco di destinazione lento: scrittura ferma da {0:0} s (limite {1:0} s) — attendo senza interrompere la copia.",
+                        inWrite / 1000, DiskStallTimeout.TotalSeconds);
+                    Progress.StatusMessage = slowDiskMessage;
+                }
+                continue;
+            }
+            if (slowDiskMessage is not null && inWrite == 0)
+            {
+                if (Progress.StatusMessage == slowDiskMessage) Progress.StatusMessage = null;
+                slowDiskMessage = null;
+            }
+            if (userStop || inWrite > diskStallMs || phoneIdle > stallMs)
             {
                 stalled = !userStop;
+                diskStalled = !userStop && inWrite > diskStallMs;
+                if (stalled)
+                {
+                    _log.Info(L.F("[diagnosi] stallo su {0} a {1} di {2} dopo {3} ms senza dati: {4}; {5}",
+                        active.Path, Format.Bytes(active.Bytes), Format.Bytes(active.Size), diskStalled ? (long)inWrite : phoneIdle,
+                        inWrite > 0 ? L.F("il programma sta scrivendo su disco da {0} ms", (int)inWrite) : L.T("nessuna scrittura su disco in corso: in attesa di dati da adb"),
+                        ProcessSnapshot.Take().DescribeSince(snapshot)));
+                }
                 attemptCts.Cancel();
                 if (await Task.WhenAny(pull, Task.Delay(ForceCloseDelay)) != pull)
                 {
@@ -862,10 +1102,16 @@ public sealed class SyncEngine
             try { await fs.DisposeAsync(); } catch { }
         }
 
+        if (slowDiskMessage is not null && Progress.StatusMessage == slowDiskMessage) Progress.StatusMessage = null;
         ct.ThrowIfCancellationRequested();
+        if (diskStalled)
+            throw new DiskStallException(L.F("scrittura sul disco del PC ferma da oltre {0:0} s (disco di destinazione bloccato)", DiskStallTimeout.TotalSeconds));
         if (stalled || abandoned)
-            throw new StallException($"nessun dato ricevuto per {StallTimeout.TotalSeconds:0} s (trasferimento bloccato)");
+            throw new StallException(L.F("nessun dato ricevuto per {0:0} s (trasferimento bloccato)", StallTimeout.TotalSeconds));
         if (pullError is not null) ExceptionDispatchInfo.Throw(pullError);
+        // ripresa: se il telefono ha mandato meno dei byte che avevamo già, il parziale non è coerente
+        if (resumeFrom > 0 && Volatile.Read(ref receivedTotal) < resumeFrom)
+            throw new CorruptCopyException(L.F("ricevuti {0} byte, meno dei {1} già scritti: la copia riparte da zero", Volatile.Read(ref receivedTotal), resumeFrom));
         return length;
     }
 
@@ -875,24 +1121,25 @@ public sealed class SyncEngine
         if (received != remote.Size)
         {
             var st = await _device.StatAsync(remotePath, ct);
-            if (st is null) throw new PermanentCopyException("il file non è più presente sul telefono");
+            if (st is null) throw new PermanentCopyException(L.T("il file non è più presente sul telefono"));
             if (st.Value.Size == received)
             {
-                _log.Warn($"{item.RelativePath} è stato modificato sul telefono dopo la scansione: copiata la versione attuale ({Format.Bytes(received)}).");
+                _log.Warn(L.F("{0} è stato modificato sul telefono dopo la scansione: copiata la versione attuale ({1}).", item.RelativePath, Format.Bytes(received)));
                 item.Remote = remote with { Size = received, MtimeUnix = st.Value.Mtime, MtimeFraction = st.Value.Fraction };
                 item.RemoteChangedDuringCopy = true;
                 remote = item.Remote;
             }
             else
             {
-                throw new TransientCopyException($"ricevuti {Format.Number(received)} byte invece di {Format.Number(remote.Size)} (copia incompleta)");
+                throw new TransientCopyException(L.F("ricevuti {0} byte invece di {1} (copia incompleta)", Format.Number(received), Format.Number(remote.Size)));
             }
         }
 
+        string? verifiedMd5 = null;
         if (_o.VerifyHash)
         {
             string? remoteMd5 = await _device.Md5Async(remotePath, ct);
-            if (remoteMd5 is null) throw new TransientCopyException("impossibile calcolare l'MD5 sul telefono");
+            if (remoteMd5 is null) throw new TransientCopyException(L.T("impossibile calcolare l'MD5 sul telefono"));
             string localMd5;
             try
             {
@@ -901,7 +1148,8 @@ public sealed class SyncEngine
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new LocalIoException(ex); }
             if (!string.Equals(remoteMd5, localMd5, StringComparison.OrdinalIgnoreCase))
-                throw new TransientCopyException($"MD5 diverso (telefono {remoteMd5}, PC {localMd5}): copia corrotta");
+                throw new CorruptCopyException(L.F("MD5 diverso (telefono {0}, PC {1}): copia corrotta", remoteMd5, localMd5), md5Mismatch: true);
+            verifiedMd5 = localMd5;
         }
 
         if (LocalChangedSincePlan(item, finalPath) is { } changed)
@@ -916,17 +1164,18 @@ public sealed class SyncEngine
             File.Move(tempPath, finalPath, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new LocalIoException(ex); }
+        if (verifiedMd5 is not null) RecordMd5(item, verifiedMd5);   // solo per un file davvero scritto
 
         try
         {
             if (TimeUtil.IsValidUnix(remote.MtimeUnix))
                 SetFileTimes(finalPath, remote.MtimeUtc, remote.MtimeUnix);
             else
-                _log.Warn($"{item.RelativePath}: data di modifica non valida sul telefono ({remote.MtimeUnix}), non impostata.");
+                _log.Warn(L.F("{0}: data di modifica non valida sul telefono ({1}), non impostata.", item.RelativePath, remote.MtimeUnix));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            _log.Warn($"{item.RelativePath}: copiato, ma impossibile impostare le date ({ex.Message}).");
+            _log.Warn(L.F("{0}: copiato, ma impossibile impostare le date ({1}).", item.RelativePath, ex.Message));
         }
     }
 
@@ -939,15 +1188,15 @@ public sealed class SyncEngine
         try
         {
             if (Directory.Exists(finalPath))
-                return "sul PC esiste una cartella con lo stesso nome: non sovrascritta";
+                return L.T("sul PC esiste una cartella con lo stesso nome: non sovrascritta");
             var fi = new FileInfo(finalPath);
             if (item.Local is null)
-                return fi.Exists ? "il file è comparso sul PC dopo il confronto: non sovrascritto (rifai il confronto)" : null;
+                return fi.Exists ? L.T("il file è comparso sul PC dopo il confronto: non sovrascritto (rifai il confronto)") : null;
             if (!fi.Exists)
                 return null; // eliminato sul PC dopo il confronto: ricrearlo dal telefono è sicuro
             long mtime = new DateTimeOffset(fi.LastWriteTimeUtc).ToUnixTimeSeconds();
             if (fi.Length != item.Local.Size || mtime != item.Local.MtimeUnix)
-                return "il file sul PC è stato modificato dopo il confronto: non sovrascritto (rifai il confronto)";
+                return L.T("il file sul PC è stato modificato dopo il confronto: non sovrascritto (rifai il confronto)");
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -977,7 +1226,7 @@ public sealed class SyncEngine
     private async Task WaitForDestinationCoreAsync(CancellationToken ct)
     {
         if (DestinationAvailable()) return;
-        string msg = $"Disco di destinazione non disponibile ({_localRoot}): ricollegalo (stessa lettera di unità) — in attesa...";
+        string msg = L.F("Disco di destinazione non disponibile ({0}): ricollegalo (stessa lettera di unità) — in attesa...", _localRoot);
         _log.Warn(msg);
         Progress.StatusMessage = msg;
         var deadline = DateTime.UtcNow + WaitTimeout;
@@ -986,10 +1235,10 @@ public sealed class SyncEngine
             while (!DestinationAvailable())
             {
                 if (DateTime.UtcNow > deadline)
-                    throw new DestinationUnavailableException($"il disco di destinazione ({_localRoot}) non è più disponibile da {Format.Duration(WaitTimeout)}.");
+                    throw new DestinationUnavailableException(L.F("il disco di destinazione ({0}) non è più disponibile da {1}.", _localRoot, Format.Duration(WaitTimeout)));
                 await Task.Delay(PollInterval, ct);
             }
-            _log.Info("Disco di destinazione di nuovo disponibile: riprendo la copia.");
+            _log.Info(L.T("Disco di destinazione di nuovo disponibile: riprendo la copia."));
         }
         finally
         {
@@ -1021,16 +1270,17 @@ public sealed class SyncEngine
         int stalls = Interlocked.Exchange(ref _consecutiveStalls, 0);
         int rounds = Interlocked.Increment(ref _failedHealthRounds);
         if (rounds > MaxFailedHealthRounds)
-            throw new DeviceUnavailableException(
-                $"i trasferimenti si bloccano di continuo (oltre {Format.Number(MaxFailedHealthRounds * StallHealthThreshold)} stalli di fila senza alcun file completato, " +
+            throw new DeviceUnavailableException(L.F(
+                "i trasferimenti si bloccano di continuo (oltre {0} stalli di fila senza alcun file completato, " +
                 "anche se il telefono risponde). Scollega e ricollega il cavo (o riavvia il telefono) e rilancia: i file già copiati non verranno ricopiati. " +
-                "Se gli stalli riguardano sempre gli stessi file (vedi Log), valuta di escluderli.");
-        _log.Warn($"{stalls} stalli di fila senza file completati: verifico che il telefono risponda (controllo {rounds}/{MaxFailedHealthRounds})...");
-        Progress.StatusMessage = "Molti stalli di fila: verifico il collegamento con il telefono...";
+                "Se gli stalli riguardano sempre gli stessi file (vedi Log), valuta di escluderli.",
+                Format.Number(MaxFailedHealthRounds * StallHealthThreshold)));
+        _log.Warn(L.F("{0} stalli di fila senza file completati: verifico che il telefono risponda (controllo {1}/{2})...", stalls, rounds, MaxFailedHealthRounds));
+        Progress.StatusMessage = L.T("Molti stalli di fila: verifico il collegamento con il telefono...");
         try
         {
             await _device.WaitOnlineAsync(WaitTimeout, m => Progress.StatusMessage = m, ct);
-            _log.Info("Il telefono risponde: proseguo.");
+            _log.Info(L.T("Il telefono risponde: proseguo."));
         }
         finally
         {
@@ -1051,12 +1301,12 @@ public sealed class SyncEngine
     private async Task WaitForDeviceCoreAsync(CancellationToken ct)
     {
         if (await _device.IsOnlineAsync(ct)) return;
-        _log.Warn("Telefono non raggiungibile: attendo che torni disponibile...");
-        Progress.StatusMessage = "Telefono non raggiungibile: in attesa della riconnessione...";
+        _log.Warn(L.T("Telefono non raggiungibile: attendo che torni disponibile..."));
+        Progress.StatusMessage = L.T("Telefono non raggiungibile: in attesa della riconnessione...");
         try
         {
             await _device.WaitOnlineAsync(WaitTimeout, m => Progress.StatusMessage = m, ct);
-            _log.Info("Telefono di nuovo disponibile: riprendo la copia.");
+            _log.Info(L.T("Telefono di nuovo disponibile: riprendo la copia."));
         }
         finally
         {
@@ -1066,7 +1316,7 @@ public sealed class SyncEngine
 
     private static (FailureKind, string) Classify(Exception ex)
     {
-        if (IsDiskFull(ex)) return (FailureKind.Fatal, "spazio su disco esaurito sul PC");
+        if (IsDiskFull(ex)) return (FailureKind.Fatal, L.T("spazio su disco esaurito sul PC"));
         switch (ex)
         {
             case StallException s: return (FailureKind.Transient, s.Message);
@@ -1075,15 +1325,15 @@ public sealed class SyncEngine
             case DeviceUnavailableException d: return (FailureKind.Fatal, d.Message);
             case DestinationUnavailableException d: return (FailureKind.Fatal, d.Message);
             case LocalIoException { InnerException: UnauthorizedAccessException u }:
-                return (FailureKind.Permanent, "accesso negato sul PC: " + u.Message);
+                return (FailureKind.Permanent, L.F("accesso negato sul PC: {0}", u.Message));
             case LocalIoException l:
-                return (FailureKind.Transient, "errore di scrittura sul PC: " + l.Message);
+                return (FailureKind.Transient, L.F("errore di scrittura sul PC: {0}", l.Message));
         }
         string msg = ex.Message;
         if (msg.Contains("No such file", StringComparison.OrdinalIgnoreCase))
-            return (FailureKind.Permanent, "il file non è più presente sul telefono");
+            return (FailureKind.Permanent, L.T("il file non è più presente sul telefono"));
         if (msg.Contains("Permission denied", StringComparison.OrdinalIgnoreCase))
-            return (FailureKind.Permanent, "permesso negato sul telefono");
+            return (FailureKind.Unreadable, L.T("permesso negato sul telefono"));
         return (FailureKind.Transient, $"{ex.GetType().Name}: {msg}");
     }
 

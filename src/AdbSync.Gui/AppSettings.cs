@@ -15,12 +15,18 @@ internal sealed class AppSettings
     public bool OverwriteConflicts { get; set; }
     public int Parallel { get; set; } = 2;
     public int StallSeconds { get; set; } = 30;
+    /// <summary>Limite di una singola scrittura sul disco del PC (minimo 30 s), impostato dal menu Strumenti.</summary>
+    public int DiskStallSeconds { get; set; } = 120;
     public int Retries { get; set; } = 5;
     public int WaitDeviceSeconds { get; set; } = 300;
     public List<string> Excludes { get; set; } = new(SyncOptions.DefaultExcludes);
     public bool ShowDetailedLog { get; set; }
 
     public bool Diagnostic { get; set; }
+    /// <summary>Protocollo di trasferimento ADB v2 (come "adb pull").</summary>
+    public bool SyncV2 { get; set; }
+    /// <summary>Lingua dell'interfaccia: "it" (incorporata) o il codice di un file lang\&lt;codice&gt;.json.</summary>
+    public string Language { get; set; } = L.DefaultCode;
     public DateAlignMode AlignSameSizeDates { get; set; } = DateAlignMode.None;
     /// <summary>Posizione del divisore tra le schede e il riquadro Stato (0 = automatica).</summary>
     public int SplitterDistance { get; set; }
@@ -58,7 +64,9 @@ internal sealed class AppSettings
             VerifyHash = VerifyHash,
             OverwriteConflicts = OverwriteConflicts,
             ParallelTransfers = Parallel,
+            UseSyncV2 = SyncV2,
             StallTimeoutSeconds = StallSeconds,
+            DiskStallTimeoutSeconds = Math.Max(SyncOptions.MinDiskStallSeconds, DiskStallSeconds),
             MaxRetries = Retries,
             DeviceWaitTimeoutSeconds = WaitDeviceSeconds,
             Diagnostic = Diagnostic,

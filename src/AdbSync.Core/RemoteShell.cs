@@ -121,8 +121,12 @@ public static class RemoteShell
     public static string BuildStatCommand(string remotePath) =>
         $"stat -c '%s|%Y|%y' {Quote(remotePath)} 2>&1";
 
+    /// <summary>
+    /// MD5 di un file letto da stdin: l'output è "hash  -" anche per i nomi con "\" o a capo
+    /// (con il nome come argomento md5sum li riscrive con escape e mette "\" davanti all'hash).
+    /// </summary>
     public static string BuildMd5Command(string remotePath) =>
-        $"md5sum {Quote(remotePath)} 2>&1";
+        $"md5sum < {Quote(remotePath)} 2>&1";
 
     /// <summary>Estrae la frazione di secondo (in unità da 100 ns) da "2024-03-01 10:00:00.123456789 +0100".</summary>
     public static int ParseFraction(string humanTime)

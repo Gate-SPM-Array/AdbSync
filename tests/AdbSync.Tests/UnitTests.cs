@@ -475,3 +475,52 @@ public class ClassifyTests
         Assert.Equal(1, plan.CountToCopy);
     }
 }
+
+public class PathMapperDescribeTests
+{
+    [Theory]
+    [InlineData("a?b", "a？b", "\"?\" → \"？\" (U+FF1F)")]
+    [InlineData("dir/file.", "dir/file．", "punto finale → \"．\" (U+FF0E)")]
+    [InlineData("nome ", "nome␣", "spazio finale → \"␣\" (U+2423)")]
+    [InlineData("CON.txt", "_CON.txt", "\"CON.txt\" è un nome riservato di Windows: aggiunto \"_\" davanti")]
+    [InlineData("x?y/a?b.", "x？y/a？b．", "\"?\" → \"？\" (U+FF1F); punto finale → \"．\" (U+FF0E)")]
+    [InlineData("ok/ok", "ok/ok", "")]
+    public void DescribesSubstitutions(string remote, string local, string expected) =>
+        Assert.Equal(expected, AdbSync.Core.PathMapper.DescribeChanges(remote, local));
+
+    [Fact]
+    public void DescriptionMatchesTheActualMapping()
+    {
+        foreach (var name in new[] { "a:b*c|d", "file.", "x\u0001y", "AUX", "dir:1/f?.txt" })
+        {
+            var (local, changed) = AdbSync.Core.PathMapper.ToLocalRelative(name);
+            Assert.True(changed);
+            Assert.NotEqual("", AdbSync.Core.PathMapper.DescribeChanges(name, local));
+        }
+    }
+}
+
+public class VersionConsistencyTests
+{
+    /// <summary>Ogni versione consegnata ha un numero unico, uguale ovunque e documentato in testa al CHANGELOG.</summary>
+    [Fact]
+    public void VersionIsTheSameEverywhereAndDocumented()
+    {
+        string root = LocalizationTests.RepoRoot();
+        string Read(string rel) => File.ReadAllText(Path.Combine(root, rel));
+        string Match(string text, string pattern) =>
+            System.Text.RegularExpressions.Regex.Match(text, pattern) is { Success: true } m ? m.Groups[1].Value : "(non trovato)";
+
+        // csproj: 0.1.5 oppure 0.1.5-D (suffisso di diagnosi); ovunque altrove lo stesso numero scritto 0.1.5D
+        string csproj = Match(Read("src/AdbSync.Core/AdbSync.Core.csproj"), @"<Version>([^<]+)</Version>");
+        Assert.Matches(@"^\d+\.\d+\.\d+(-[A-Za-z0-9]+)?$", csproj);
+        Assert.Equal(csproj, Match(Read("src/AdbSync.Gui/AdbSync.Gui.csproj"), @"<Version>([^<]+)</Version>"));
+        Assert.Equal(csproj, Match(Read("src/AdbSync.Cli/AdbSync.Cli.csproj"), @"<Version>([^<]+)</Version>"));
+        string v = csproj.Replace("-", "");
+        Assert.Equal(v, Match(Read("src/AdbSync.Gui/MainForm.cs"), @"AppVersion = ""([^""]+)"""));
+        Assert.Equal(v, Match(Read("src/AdbSync.Cli/Program.cs"), @"AppVersion = ""([^""]+)"""));
+        Assert.Equal(v, Match(Read("CHANGELOG.md"), @"(?m)^## v(\S+)"));
+        Assert.Equal(v, Match(Read("README.md"), @"^# AdbSync v(\S+)"));
+        Assert.Equal(v, Match(Read("README.it.md"), @"^# AdbSync v(\S+)"));
+    }
+}

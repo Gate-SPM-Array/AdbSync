@@ -116,8 +116,12 @@ public sealed class EngineTests : IDisposable
         var (plan, r) = await Run(d, new SyncOptions { VerifyHash = true });
         Assert.True(r.FullySucceeded, r.Summary);
         AssertFilesMatch(d);
-        Assert.Equal(2, plan.Items.Single(i => i.RelativePath == "Camera/IMG_001.jpg").Attempts);
-        Assert.Equal(2, plan.Items.Single(i => i.RelativePath == "Camera/IMG_003.jpg").Attempts);
+        // un tentativo fallito per il guasto + quello riuscito; eventuali stalli dovuti al carico della macchina di test non contano
+        foreach (var name in new[] { "Camera/IMG_001.jpg", "Camera/IMG_003.jpg" })
+        {
+            var item = plan.Items.Single(i => i.RelativePath == name);
+            Assert.Equal(2, item.Attempts - item.Stalls);
+        }
     }
 
     [Fact]
@@ -619,7 +623,7 @@ public sealed class EngineV012Tests : IDisposable
         public Task<(long Size, long Mtime, int Fraction)?> StatAsync(string p, CancellationToken ct) => inner.StatAsync(p, ct);
         public Task<string?> Md5Async(string p, CancellationToken ct) => inner.Md5Async(p, ct);
         public Task<IReadOnlyDictionary<string, string?>> HashBatchAsync(string r, IReadOnlyList<string> p, bool q, CancellationToken ct) => inner.HashBatchAsync(r, p, q, ct);
-        public IRemoteTransfer OpenTransfer() => inner.OpenTransfer();
+        public IRemoteTransfer OpenTransfer(bool useV2 = false) => inner.OpenTransfer(useV2);
     }
 }
 
@@ -655,5 +659,318 @@ public class ScaleTests
         Assert.True(planTime < TimeSpan.FromSeconds(30));
         Assert.True(mb < 1200, $"memoria {mb:0} MB");
         GC.KeepAlive(remote); GC.KeepAlive(local); GC.KeepAlive(plan);
+    }
+}
+
+public sealed class EngineV013Tests : IDisposable
+{
+    private readonly string _local = Path.Combine(Path.GetTempPath(), "adbsync_v013_" + Guid.NewGuid().ToString("N"));
+    private readonly SyncLogger _log;
+
+    public EngineV013Tests() => _log = new SyncLogger(_local + "_logs");
+
+    public void Dispose()
+    {
+        _log.Dispose();
+        try { Directory.Delete(_local, true); } catch { }
+        try { Directory.Delete(_local + "_logs", true); } catch { }
+    }
+
+    private void PutLocal(string rel, string content)
+    {
+        string p = Path.Combine(_local, rel.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.WriteAllText(p, content);
+    }
+
+    [Fact]
+    public async Task ExcludedFilesAreVisibleWithTheirRuleAndNeverTouched()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("foto.jpg", 1000, 1_700_000_000);
+        d.Add(".thumbnails/a.jpg", 500, 1_700_000_000);
+        PutLocal(".thumbnails/a.jpg", "vecchia miniatura");   // presente su entrambi, ma escluso
+        PutLocal(".thumbnails/b.jpg", "solo sul PC");         // solo sul PC, escluso
+        var opts = new SyncOptions();
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+
+        var excluded = plan.Items.Where(i => i.Category == ItemCategory.Excluded).OrderBy(i => i.RelativePath).ToList();
+        Assert.Equal(2, excluded.Count);
+        Assert.All(excluded, i => Assert.Equal(".thumbnails/", i.ExcludedBy));
+        Assert.All(excluded, i => Assert.Equal(ItemAction.Skip, i.Action));
+        Assert.NotNull(excluded[0].Remote); Assert.NotNull(excluded[0].Local);   // a.jpg: una sola riga per entrambi i lati
+        Assert.Null(excluded[1].Remote);                                         // b.jpg: solo sul PC
+        Assert.Equal(1, plan.ExcludedCount);
+        Assert.Equal(1, plan.ExcludedLocalCount);
+        Assert.Equal(2, plan.RemoteFileCount);
+        Assert.Equal(0, plan.NotCopiable);
+        Assert.DoesNotContain(plan.Items, i => i.Category == ItemCategory.OnlyOnPc);
+
+        var r = await new SyncEngine(d, opts, _log).RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);
+        Assert.Equal(1, r.Copied);
+        Assert.Equal("vecchia miniatura", File.ReadAllText(Path.Combine(_local, ".thumbnails", "a.jpg")));
+    }
+
+    [Fact]
+    public async Task ExclusionRulesApplyRelativeToTheChosenPhoneFolder()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("a.jpg", 500, 1_700_000_000);   // come se la cartella scelta fosse già .../.thumbnails
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, new SyncOptions(), _log, null, default);
+        Assert.Equal(ItemCategory.New, Assert.Single(plan.Items).Category);
+    }
+
+    [Fact]
+    public async Task ConvertedNamesAreListedInATextFile()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("Note: idea?.txt", 100, 1_700_000_000);
+        d.Add("Cartella <1>/foto.jpg", 200, 1_700_000_000);
+        d.Add("normale.jpg", 300, 1_700_000_000);
+        var opts = new SyncOptions();
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var r = await new SyncEngine(d, opts, _log).RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);
+        Assert.NotNull(r.RenamedLogPath);
+        Assert.Equal(3, r.RenamedCount);   // 1 cartella + 2 file (anche quello dentro la cartella convertita)
+        var lines = File.ReadAllLines(r.RenamedLogPath!);
+        Assert.Contains(lines, l => l == "file\tNote: idea?.txt\tNote： idea？.txt\tcopiato\t\":\" → \"：\" (U+FF1A); \"?\" → \"？\" (U+FF1F)");
+        Assert.Contains(lines, l => l == "cartella\tCartella <1>\tCartella ＜1＞\tcreata\t\"<\" → \"＜\" (U+FF1C); \">\" → \"＞\" (U+FF1E)");
+        Assert.Contains(lines, l => l.StartsWith("file\tCartella <1>/foto.jpg\tCartella ＜1＞\\foto.jpg\t", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("normale.jpg"));
+    }
+
+    [Fact]
+    public async Task NoRenamedFileWhenNothingWasConverted()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("normale.jpg", 300, 1_700_000_000);
+        var opts = new SyncOptions();
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var r = await new SyncEngine(d, opts, _log).RunAsync(plan, default);
+        Assert.Null(r.RenamedLogPath);
+    }
+}
+
+public sealed class DiagnosticsV015DTests : IDisposable
+{
+    private readonly string _local = Path.Combine(Path.GetTempPath(), "adbsync_v015d_" + Guid.NewGuid().ToString("N"));
+    private readonly SyncLogger _log;
+    private readonly List<string> _lines = new();
+
+    public DiagnosticsV015DTests()
+    {
+        _log = new SyncLogger(_local + "_logs");
+        _log.EntryWritten += e => { lock (_lines) _lines.Add(e.Message); };
+    }
+
+    public void Dispose()
+    {
+        _log.Dispose();
+        try { Directory.Delete(_local, true); } catch { }
+        try { Directory.Delete(_local + "_logs", true); } catch { }
+    }
+
+    [Fact]
+    public async Task PausesInTheDataFlowAreRecordedWithTheirCause()
+    {
+        var d = new FakeRemoteDevice { PauseDuration = TimeSpan.FromMilliseconds(700) };
+        d.Add("grande.bin", 200_000, 1_700_000_000);
+        d.AddFault("grande.bin", FakeRemoteDevice.Fault.Pause);
+        var opts = new SyncOptions { ParallelTransfers = 1, StallTimeoutSeconds = 30 };
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var r = await new SyncEngine(d, opts, _log) { PauseLogThresholdMs = 300 }.RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);
+        string line;
+        lock (_lines) line = _lines.Single(l => l.StartsWith("[diagnosi] pausa di", StringComparison.Ordinal));
+        Assert.Contains("grande.bin", line);
+        Assert.Contains("attesa dati da adb", line);
+        Assert.Contains("thread pool", line);
+        lock (_lines) Assert.Contains(_lines, l => l == "Protocollo di trasferimento ADB: v1");
+    }
+
+    [Fact]
+    public async Task StallsAreDescribedAndV2OptionReachesTheTransfer()
+    {
+        var d = new FakeRemoteDevice();
+        d.Add("bloccato.bin", 50_000, 1_700_000_000);
+        d.AddFault("bloccato.bin", FakeRemoteDevice.Fault.Stall);
+        var opts = new SyncOptions { ParallelTransfers = 1, UseSyncV2 = true };
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var engine = new SyncEngine(d, opts, _log)
+        {
+            BackoffDelay = _ => TimeSpan.FromMilliseconds(10),
+            WatchdogInterval = TimeSpan.FromMilliseconds(20),
+            StallTimeoutOverride = TimeSpan.FromMilliseconds(200),
+            ForceCloseDelay = TimeSpan.FromMilliseconds(100),
+        };
+        var r = await engine.RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);   // al secondo tentativo passa
+        Assert.True(d.LastOpenedV2);
+        lock (_lines)
+        {
+            Assert.Contains(_lines, l => l.StartsWith("[diagnosi] stallo su bloccato.bin", StringComparison.Ordinal) && l.Contains("in attesa di dati da adb"));
+            Assert.Contains(_lines, l => l == "Protocollo di trasferimento ADB: v2");
+        }
+    }
+
+    [Fact]
+    public async Task TimingStreamMeasuresWrites()
+    {
+        var ms = new MemoryStream();
+        var t = new TimingStream(ms);
+        Assert.Equal(0, t.WriteInProgressMs);
+        await t.WriteAsync(new byte[10]);
+        Assert.Equal(10, ms.Length);
+        Assert.True(t.LastWriteMs >= 0);
+        Assert.Equal(0, t.WriteInProgressMs);
+    }
+}
+
+/// <summary>Disco del PC che si ferma: una scrittura (la n-esima) resta bloccata per un certo tempo.</summary>
+internal sealed class SlowDiskStream(Stream inner, int slowWriteIndex, TimeSpan delay) : Stream
+{
+    private int _writes;
+    public long BytesWritten;
+    public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        if (Interlocked.Increment(ref _writes) == slowWriteIndex) await Task.Delay(delay, CancellationToken.None);
+        Interlocked.Add(ref BytesWritten, buffer.Length);
+        await inner.WriteAsync(buffer, cancellationToken);
+    }
+    public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+        WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+    public override void Write(byte[] buffer, int offset, int count) => WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+    public override bool CanRead => false;
+    public override bool CanSeek => false;
+    public override bool CanWrite => true;
+    public override long Length => inner.Length;
+    public override long Position { get => inner.Position; set => inner.Position = value; }
+    public override void Flush() => inner.Flush();
+    public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+    public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => inner.SetLength(value);
+}
+
+public sealed class DualStallV016Tests : IDisposable
+{
+    private readonly string _local = Path.Combine(Path.GetTempPath(), "adbsync_v016_" + Guid.NewGuid().ToString("N"));
+    private readonly SyncLogger _log;
+    private readonly List<string> _lines = new();
+
+    public DualStallV016Tests()
+    {
+        _log = new SyncLogger(_local + "_logs");
+        _log.EntryWritten += e => { lock (_lines) _lines.Add(e.Message); };
+    }
+
+    public void Dispose()
+    {
+        _log.Dispose();
+        try { Directory.Delete(_local, true); } catch { }
+        try { Directory.Delete(_local + "_logs", true); } catch { }
+    }
+
+    private SyncEngine Engine(IRemoteDevice d, SyncOptions o) => new(d, o, _log)
+    {
+        BackoffDelay = _ => TimeSpan.FromMilliseconds(10),
+        WatchdogInterval = TimeSpan.FromMilliseconds(20),
+        StallTimeoutOverride = TimeSpan.FromMilliseconds(300),
+        ForceCloseDelay = TimeSpan.FromMilliseconds(200),
+        SlowDiskNotice = TimeSpan.FromMilliseconds(100),
+    };
+
+    private bool Logged(Func<string, bool> p) { lock (_lines) return _lines.Any(p); }
+
+    [Fact]
+    public async Task SlowDiskWriteIsNotAPhoneStall()
+    {
+        var d = new FakeRemoteDevice { ChunkSize = 4096 };
+        d.Add("video.mp4", 100_000, 1_700_000_000);
+        var opts = new SyncOptions { ParallelTransfers = 1 };
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var engine = Engine(d, opts);
+        engine.DiskStallTimeoutOverride = TimeSpan.FromSeconds(30);
+        string? seenStatus = null;
+        engine.DestinationWrapper = fs => new SlowDiskStream(fs, 5, TimeSpan.FromMilliseconds(1200)); // 4× il timeout del telefono
+        var run = engine.RunAsync(plan, default);
+        while (!run.IsCompleted) { if (engine.Progress.StatusMessage is { } m) seenStatus = m; await Task.Delay(20); }
+        var r = await run;
+        Assert.True(r.FullySucceeded, r.Summary);
+        Assert.Equal(0, r.Stalls);                                   // il disco lento non è uno stallo del telefono
+        Assert.Equal(1, plan.Items.Single().Attempts);
+        Assert.NotNull(seenStatus);
+        Assert.Contains("Disco di destinazione lento", seenStatus);
+        Assert.Null(engine.Progress.StatusMessage);                  // il messaggio sparisce quando il disco riparte
+    }
+
+    [Fact]
+    public async Task DiskBlockedBeyondItsLimitIsRetriedWithoutBlamingThePhone()
+    {
+        var d = new FakeRemoteDevice { ChunkSize = 4096 };
+        d.Add("video.mp4", 100_000, 1_700_000_000);
+        var opts = new SyncOptions { ParallelTransfers = 1 };
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var engine = Engine(d, opts);
+        engine.DiskStallTimeoutOverride = TimeSpan.FromMilliseconds(500);
+        int opened = 0;
+        engine.DestinationWrapper = fs => Interlocked.Increment(ref opened) == 1 ? new SlowDiskStream(fs, 3, TimeSpan.FromSeconds(2)) : fs;
+        var r = await engine.RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);
+        Assert.Equal(2, plan.Items.Single().Attempts);
+        Assert.True(Logged(l => l.StartsWith("Disco di destinazione bloccato durante video.mp4", StringComparison.Ordinal)));
+        Assert.Equal(0, d.WaitOnlineCalls);                          // nessun controllo del telefono per colpa del disco
+        Assert.Equal(d.Files["video.mp4"].Data, File.ReadAllBytes(Path.Combine(_local, "video.mp4")));
+    }
+
+    [Fact]
+    public async Task AfterAStallTheCopyResumesWithoutRewritingWhatIsAlreadyOnDisk()
+    {
+        var d = new FakeRemoteDevice { ChunkSize = 65536 };
+        d.Add("grande.bin", 6 * 1024 * 1024, 1_700_000_000, seed: 7);
+        d.AddFault("grande.bin", FakeRemoteDevice.Fault.StallAfterHalf);
+        var opts = new SyncOptions { ParallelTransfers = 1 };
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var engine = Engine(d, opts);
+        var disks = new List<SlowDiskStream>();
+        engine.DestinationWrapper = fs => { var s = new SlowDiskStream(fs, -1, TimeSpan.Zero); lock (disks) disks.Add(s); return s; };
+        var r = await engine.RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);
+        Assert.Equal(2, plan.Items.Single().Attempts);
+        Assert.True(Logged(l => l.StartsWith("Ripresa di grande.bin", StringComparison.Ordinal)));
+        long size = 6 * 1024 * 1024;
+        Assert.True(disks[1].BytesWritten < size * 3 / 4, $"secondo tentativo: scritti {disks[1].BytesWritten} byte su {size}");
+        Assert.Equal(d.Files["grande.bin"].Data, File.ReadAllBytes(Path.Combine(_local, "grande.bin")));
+        Assert.False(File.Exists(Path.Combine(_local, "grande.bin" + LocalScanner.TempSuffix)));
+    }
+
+    [Fact]
+    public async Task CorruptCopyIsNeverResumed()
+    {
+        var d = new FakeRemoteDevice { ChunkSize = 65536 };
+        d.Add("foto.jpg", 3 * 1024 * 1024, 1_700_000_000, seed: 3);
+        d.AddFault("foto.jpg", FakeRemoteDevice.Fault.Corrupt);
+        var opts = new SyncOptions { ParallelTransfers = 1, VerifyHash = true };
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var r = await Engine(d, opts).RunAsync(plan, default);
+        Assert.True(r.FullySucceeded, r.Summary);
+        Assert.False(Logged(l => l.StartsWith("Ripresa di", StringComparison.Ordinal)));
+        Assert.Equal(d.Files["foto.jpg"].Data, File.ReadAllBytes(Path.Combine(_local, "foto.jpg")));
+    }
+
+    [Fact]
+    public async Task PartialFilesAreRemovedWhenAFileFinallyFails()
+    {
+        var d = new FakeRemoteDevice { ChunkSize = 65536 };
+        d.Add("bloccato.bin", 4 * 1024 * 1024, 1_700_000_000);
+        d.AddFault("bloccato.bin", Enumerable.Repeat(FakeRemoteDevice.Fault.StallAfterHalf, 10).ToArray());
+        var opts = new SyncOptions { ParallelTransfers = 1, MaxRetries = 2 };
+        var plan = await SyncEngine.CompareAsync(d, d.Root, _local, opts, _log, null, default);
+        var r = await Engine(d, opts).RunAsync(plan, default);
+        Assert.Equal(1, r.Failed);
+        Assert.False(File.Exists(Path.Combine(_local, "bloccato.bin" + LocalScanner.TempSuffix)));
+        Assert.False(File.Exists(Path.Combine(_local, "bloccato.bin")));
     }
 }

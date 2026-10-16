@@ -1,4 +1,5 @@
 using System.Text;
+using AdvancedSharpAdbClient.Exceptions;
 using AdvancedSharpAdbClient;
 using AdvancedSharpAdbClient.Models;
 
@@ -60,7 +61,7 @@ public sealed class AdbRemoteDevice : IRemoteDevice
                     using var probe = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     probe.CancelAfter(TimeSpan.FromSeconds(10));
                     var sb = new StringBuilder();
-                    await _env.Client.ExecuteRemoteCommandAsync("echo ok", Device, l => { sb.Append(l); return true; }, Encoding.UTF8, probe.Token);
+                    await _env.Client.ExecuteRemoteCommandAsync("printf ok", Device, l => { sb.Append(l); return true; }, Encoding.UTF8, probe.Token);
                     if (sb.ToString().Contains("ok")) return;
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
@@ -69,14 +70,18 @@ public sealed class AdbRemoteDevice : IRemoteDevice
             }
             if (first)
             {
-                status?.Invoke($"In attesa del telefono {DisplayName}... (ricollega il cavo / sblocca il telefono se richiesto)");
+                status?.Invoke(L.F("In attesa del telefono {0}... (ricollega il cavo / sblocca il telefono se richiesto)", DisplayName));
                 first = false;
             }
             if (DateTime.UtcNow > deadline)
-                throw new DeviceUnavailableException($"Il telefono non è più raggiungibile da {Format.Duration(timeout)}.");
+                throw new DeviceUnavailableException(L.F("Il telefono non è più raggiungibile da {0}.", Format.Duration(timeout)));
             await Task.Delay(2000, ct);
         }
     }
+
+    /// <summary>Produttore, modello, nome dato dall'utente e versione di Android (per il nome della cartella di sessione).</summary>
+    public async Task<DeviceIdentity> GetIdentityAsync(string fallbackModel, CancellationToken ct) =>
+        DeviceIdentity.Parse(await ShellAsync(DeviceIdentity.Command, ct, TimeSpan.FromSeconds(15)), fallbackModel);
 
     private async Task<string> ShellAsync(string command, CancellationToken ct, TimeSpan? timeout = null)
     {
@@ -85,7 +90,7 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         var sb = new StringBuilder();
         await _env.Client.ExecuteRemoteCommandAsync(command, Device, l => { sb.AppendLine(l); return true; }, Encoding.UTF8, cts.Token);
         if (cts.IsCancellationRequested && !ct.IsCancellationRequested)
-            throw new TimeoutException($"Il comando sul telefono non ha risposto: {command}");
+            throw new TimeoutException(L.F("Il comando sul telefono non ha risposto: {0}", command));
         ct.ThrowIfCancellationRequested();
         return sb.ToString();
     }
@@ -132,7 +137,7 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         catch (Exception ex)
         {
             // Connessione persa a metà: il parser segnalerà la scansione come incompleta (manca il marcatore finale).
-            parser.Feed(RemoteShell.ErrMarker + "connessione con il telefono interrotta durante la scansione: " + ex.Message);
+            parser.Feed(RemoteShell.ErrMarker + L.F("connessione con il telefono interrotta durante la scansione: {0}", ex.Message));
         }
         finally
         {
@@ -141,7 +146,7 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         }
         ct.ThrowIfCancellationRequested();
         if (stalled)
-            parser.Feed(RemoteShell.ErrMarker + $"il telefono non ha inviato dati per {ScanInactivityTimeout.TotalSeconds:0} s: scansione bloccata");
+            parser.Feed(RemoteShell.ErrMarker + L.F("il telefono non ha inviato dati per {0:0} s: scansione bloccata", ScanInactivityTimeout.TotalSeconds));
         filesFound?.Invoke((int)parser.EntriesReceived);
         return parser.Complete();
     }
@@ -182,18 +187,21 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new TimeoutException("il calcolo degli hash sul telefono non ha risposto in tempo");
+            throw new TimeoutException(L.T("il calcolo degli hash sul telefono non ha risposto in tempo"));
         }
         ct.ThrowIfCancellationRequested();
-        if (cts.IsCancellationRequested) throw new TimeoutException("il calcolo degli hash sul telefono non ha risposto in tempo");
+        if (cts.IsCancellationRequested) throw new TimeoutException(L.T("il calcolo degli hash sul telefono non ha risposto in tempo"));
         var result = RemoteShell.ParseHashBatch(lines, out bool complete);
-        if (!complete) throw new IOException("risposta incompleta dal telefono durante il calcolo degli hash");
+        if (!complete) throw new IOException(L.T("risposta incompleta dal telefono durante il calcolo degli hash"));
         return result;
     }
 
-    public IRemoteTransfer OpenTransfer() => new AdbTransfer(_env.Client, Device);
+    /// <summary>Il telefono ha rifiutato il protocollo v2: da qui in poi si usa la v1.</summary>
+    private volatile bool _v2Unsupported;
 
-    private sealed class AdbTransfer(IAdbClient client, DeviceData device) : IRemoteTransfer
+    public IRemoteTransfer OpenTransfer(bool useV2 = false) => new AdbTransfer(_env.Client, Device, useV2, this);
+
+    private sealed class AdbTransfer(IAdbClient client, DeviceData device, bool useV2, AdbRemoteDevice owner) : IRemoteTransfer
     {
         private SyncService? _service;
         private volatile bool _disposed;
@@ -202,7 +210,21 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             _service ??= new SyncService(client, device);
-            await _service.PullAsync(remotePath, destination, e => progress((long)e.ReceivedBytesSize), useV2: false, ct);
+            bool v2 = useV2 && !owner._v2Unsupported;
+            long received = 0;
+            try
+            {
+                await _service.PullAsync(remotePath, destination, e => { received = (long)e.ReceivedBytesSize; progress(received); }, useV2: v2, ct);
+            }
+            catch (AdbException) when (v2 && received == 0 && !ct.IsCancellationRequested)
+            {
+                // v2 non supportata dal telefono (stat_v2/sendrecv_v2): si riprova subito con la v1, una volta per tutte.
+                owner._v2Unsupported = true;
+                try { _service.Dispose(); } catch { }
+                _service = new SyncService(client, device);
+                if (destination.CanSeek) { destination.SetLength(0); destination.Position = 0; }
+                await _service.PullAsync(remotePath, destination, e => progress((long)e.ReceivedBytesSize), useV2: false, ct);
+            }
         }
 
         public void Dispose()

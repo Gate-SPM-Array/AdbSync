@@ -17,6 +17,8 @@ public sealed class ComparisonSession
 
     /// <summary>File con stessa dimensione verificati come DIVERSI in questa sessione (percorso PC).</summary>
     private readonly HashSet<string> _knownDifferent = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>File che Android non ha permesso di leggere durante la copia (percorso telefono): non si ripropongono.</summary>
+    private readonly HashSet<string> _unreadable = new(StringComparer.Ordinal);
     private readonly object _lock = new();
     /// <summary>File cambiati sul telefono durante la copia: la versione copiata sostituisce quella della scansione.</summary>
     private readonly Dictionary<string, RemoteFile> _remoteUpdates = new(StringComparer.Ordinal);
@@ -35,7 +37,7 @@ public sealed class ComparisonSession
                 ? Remote.Files
                 : Remote.Files.Select(f => _remoteUpdates.TryGetValue(f.RelativePath, out var u) ? u : f);
             var plan = PlanBuilder.Build(RemoteRoot, LocalRoot, remoteFiles, Local, options, Remote.Directories,
-                Remote.PermissionDenied, _knownDifferent);
+                Remote.PermissionDenied, _knownDifferent, _unreadable);
             return new SyncPlan
             {
                 RemoteRoot = plan.RemoteRoot,
@@ -43,6 +45,7 @@ public sealed class ComparisonSession
                 Items = plan.Items,
                 Directories = plan.Directories,
                 ExcludedCount = plan.ExcludedCount,
+                ExcludedLocalCount = plan.ExcludedLocalCount,
                 StaleTempFiles = Local.StaleTempFiles.ToList(),
                 PermissionDenied = plan.PermissionDenied,
                 RemoteFileCount = plan.RemoteFileCount,
@@ -71,10 +74,16 @@ public sealed class ComparisonSession
                     Local.Files[i.LocalRelativePath] = new LocalFile(i.LocalRelativePath, size, i.Remote.MtimeUnix, i.Remote.MtimeUnix);
                     if (i.Action == ItemAction.Copy) touchedDirs.Add(Parent(i.LocalRelativePath));
                     if (i.RemoteChangedDuringCopy) _remoteUpdates[i.RelativePath] = i.Remote;
+                    // ricopiato (o verificato e allineato): non è più "diverso"
+                    _knownDifferent.Remove(i.LocalRelativePath);
                 }
                 else if (i.Status == ItemStatus.ContentDiffers)
                 {
                     _knownDifferent.Add(i.LocalRelativePath);
+                }
+                else if (i.Status == ItemStatus.Unreadable)
+                {
+                    _unreadable.Add(i.RelativePath);
                 }
             }
             foreach (var d in plan.Directories.Where(d => d.Created)) touchedDirs.Add(Parent(d.LocalRelativePath));

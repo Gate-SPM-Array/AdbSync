@@ -58,6 +58,8 @@ public enum ItemCategory
     Collision,
     /// <summary>Non copiabile in sicurezza (es. destinazione dentro un collegamento/junction, nome riservato ai temporanei).</summary>
     Blocked,
+    /// <summary>Escluso da una regola (vedi <see cref="SyncItem.ExcludedBy"/>): non confrontato e mai toccato.</summary>
+    Excluded,
 }
 
 public enum ItemAction
@@ -78,6 +80,10 @@ public enum ItemStatus
     Done, Failed, NotProcessed,
     /// <summary>Verifica eseguita: il contenuto sul PC è DIVERSO da quello del telefono (date non toccate).</summary>
     ContentDiffers,
+    /// <summary>Android non permette di leggere il file (permesso negato): non copiabile, non è un errore della copia.</summary>
+    Unreadable,
+    /// <summary>Verifica del backup: contenuto sul PC identico al telefono (nessuna modifica).</summary>
+    Verified,
 }
 
 public sealed class SyncItem
@@ -95,6 +101,8 @@ public sealed class SyncItem
     public ItemCategory Category { get; set; }
     public ItemAction Action { get; set; }
     public bool NameWasSanitized { get; init; }
+    /// <summary>Regola di esclusione che ha scartato l'elemento (stessa istanza di stringa per tutti: nessun costo per file).</summary>
+    public string? ExcludedBy { get; init; }
 
     /// <summary>Motivo della classificazione (per la modalità diagnostica).</summary>
     public string Reason { get; init; } = "";
@@ -142,7 +150,10 @@ public sealed class SyncPlan
     public required string LocalRoot { get; init; }
     public required IReadOnlyList<SyncItem> Items { get; init; }
     public IReadOnlyList<DirItem> Directories { get; init; } = Array.Empty<DirItem>();
+    /// <summary>File del telefono esclusi dalle regole.</summary>
     public int ExcludedCount { get; init; }
+    /// <summary>File presenti solo sul PC che ricadono in una regola di esclusione.</summary>
+    public int ExcludedLocalCount { get; init; }
     public IReadOnlyList<string> StaleTempFiles { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> PermissionDenied { get; init; } = Array.Empty<string>();
     public DateTime CreatedAt { get; } = DateTime.Now;
@@ -173,13 +184,13 @@ public sealed class SyncPlan
         get
         {
             var parts = new List<string>();
-            if (CountToCopy > 0) parts.Add($"{Format.Number(CountToCopy)} file da copiare ({Format.Bytes(BytesToCopy)})");
-            if (CountDirsToCreate > 0) parts.Add($"{Format.Number(CountDirsToCreate)} cartelle da creare");
+            if (CountToCopy > 0) parts.Add(L.F("{0} file da copiare ({1})", Format.Number(CountToCopy), Format.Bytes(BytesToCopy)));
+            if (CountDirsToCreate > 0) parts.Add(L.F("{0} cartelle da creare", Format.Number(CountDirsToCreate)));
             int verify = CountToVerify;
             int dates = CountFileTimeFixes - verify + CountDirTimeFixes;
-            if (dates > 0) parts.Add($"{Format.Number(dates)} date da allineare");
-            if (verify > 0) parts.Add($"{Format.Number(verify)} file da verificare e allineare");
-            return parts.Count == 0 ? "nulla da fare: la cartella sul PC è già allineata" : string.Join(", ", parts);
+            if (dates > 0) parts.Add(L.F("{0} date da allineare", Format.Number(dates)));
+            if (verify > 0) parts.Add(L.F("{0} file da verificare e allineare", Format.Number(verify)));
+            return parts.Count == 0 ? L.T("nulla da fare: la cartella sul PC è già allineata") : string.Join(", ", parts);
         }
     }
 }
@@ -207,11 +218,22 @@ public sealed class SyncResult
     /// <summary>File non copiati perché si bloccavano a ogni tentativo.</summary>
     public IReadOnlyList<string> AlwaysStalled { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> MetadataErrors { get; init; } = Array.Empty<string>();
+    /// <summary>File che Android non permette di leggere (permesso negato durante la copia): compresi in <see cref="NotCopiable"/>.</summary>
+    public int Unreadable { get; init; }
+    /// <summary>Verifica MD5 dei file copiati attiva.</summary>
+    public bool Md5Enabled { get; init; }
+    /// <summary>File copiati con MD5 uguale a quello calcolato sul telefono.</summary>
+    public int Md5Verified { get; init; }
+    /// <summary>File con almeno una copia scartata perché l'MD5 non coincideva (ritentati).</summary>
+    public int CorruptRedone { get; init; }
     public TimeSpan Duration { get; init; }
     public bool Cancelled { get; init; }
     public string? AbortReason { get; init; }
     public IReadOnlyList<SyncItem> FailedItems { get; init; } = Array.Empty<SyncItem>();
     public string? ReportPath { get; set; }
+    /// <summary>File di testo con l'associazione nome originale (telefono) → nome salvato sul PC, se ci sono nomi convertiti.</summary>
+    public string? RenamedLogPath { get; set; }
+    public int RenamedCount { get; set; }
 
     /// <summary>Vero solo se TUTTO ciò che c'è sul telefono (salvo scelte esplicite) ora è sul PC.</summary>
     public bool FullySucceeded =>
@@ -222,27 +244,31 @@ public sealed class SyncResult
         get
         {
             string speed = Duration.TotalSeconds > 0.5 && BytesCopied > 0
-                ? $" — media {Format.Bytes((long)(BytesCopied / Duration.TotalSeconds))}/s"
+                ? L.F(" — media {0}/s", Format.Bytes((long)(BytesCopied / Duration.TotalSeconds)))
                 : "";
-            string head = $"{Format.Number(Copied)} file copiati ({Format.Bytes(BytesCopied)}) in {Format.Duration(Duration)}{speed}";
-            if (DirsCreated > 0) head += $", {Format.Number(DirsCreated)} cartelle create";
-            if (TimesFixed > 0) head += $", {Format.Number(TimesFixed)} date allineate";
-            if (DatesVerifiedAligned > 0) head += $" (di cui {Format.Number(DatesVerifiedAligned)} dopo verifica del contenuto)";
+            string head = L.F("{0} file copiati ({1}) in {2}{3}", Format.Number(Copied), Format.Bytes(BytesCopied), Format.Duration(Duration), speed);
+            if (DirsCreated > 0) head += L.F(", {0} cartelle create", Format.Number(DirsCreated));
+            if (TimesFixed > 0) head += L.F(", {0} date allineate", Format.Number(TimesFixed));
+            if (DatesVerifiedAligned > 0) head += L.F(" (di cui {0} dopo verifica del contenuto)", Format.Number(DatesVerifiedAligned));
             head += ".";
-            if (ContentDiffers > 0) head += $" {Format.Number(ContentDiffers)} file con stessa dimensione ma contenuto DIVERSO: lasciati invariati (vedi Errori).";
-            if (Stalls > 0) head += $" Stalli: {Format.Number(Stalls)} (circa {Format.Duration(StallTimeLost)} di attesa), file riusciti dopo più tentativi: {Format.Number(RecoveredAfterRetry)}.";
-            if (LeftUntouched > 0) head += $" {Format.Number(LeftUntouched)} file più recenti sul PC lasciati invariati (conflitti / solo data).";
-            if (FullySucceeded) return "COMPLETATO: tutto quanto previsto è stato eseguito e verificato. " + head;
+            if (ContentDiffers > 0) head += L.F(" {0} file con stessa dimensione ma contenuto DIVERSO: lasciati invariati (vedi Errori).", Format.Number(ContentDiffers));
+            if (Stalls > 0) head += L.F(" Stalli: {0} (circa {1} di attesa), file riusciti dopo più tentativi: {2}.", Format.Number(Stalls), Format.Duration(StallTimeLost), Format.Number(RecoveredAfterRetry));
+            if (LeftUntouched > 0) head += L.F(" {0} file più recenti sul PC lasciati invariati (conflitti / solo data).", Format.Number(LeftUntouched));
+            if (Md5Enabled && Md5Verified > 0) head += L.F(" MD5 verificato su {0} file copiati: identici al telefono.", Format.Number(Md5Verified));
+            if (CorruptRedone > 0) head += L.F(" {0} file avevano una copia con MD5 diverso dal telefono: copia scartata e ritentata.", Format.Number(CorruptRedone));
+            if (!Md5Enabled && Copied > 0) head += L.T(" Verifica MD5 non attiva: dei file copiati è stata controllata la dimensione.");
+            if (FullySucceeded) return L.F("COMPLETATO: tutto quanto previsto è stato eseguito e verificato. {0}", head);
             var parts = new List<string> { head };
-            if (NotCopiable > 0) parts.Add($"{Format.Number(NotCopiable)} elementi del telefono NON copiabili (permesso negato, collisioni di nomi o bloccati: vedi Log ed Errori).");
-            if (Failed > 0) parts.Add($"{Format.Number(Failed)} file NON copiati (vedi scheda Errori).");
-            if (NotProcessed > 0) parts.Add($"{Format.Number(NotProcessed)} file non elaborati.");
-            if (MetadataErrors.Count > 0) parts.Add($"{Format.Number(MetadataErrors.Count)} cartelle/date non impostate.");
-            if (Cancelled) return "ANNULLATO dall'utente. " + string.Join(" ", parts);
-            if (AbortReason is not null) return "INTERROTTO: " + AbortReason + " " + string.Join(" ", parts);
+            if (NotCopiable - Unreadable > 0) parts.Add(L.F("{0} elementi del telefono NON copiabili (permesso negato, collisioni di nomi o bloccati: vedi Log ed Errori).", Format.Number(NotCopiable - Unreadable)));
+            if (Unreadable > 0) parts.Add(L.F("{0} file che Android non permette di leggere (permesso negato): non copiabili, non vengono riproposti finché il programma resta aperto.", Format.Number(Unreadable)));
+            if (Failed > 0) parts.Add(L.F("{0} file NON copiati (vedi scheda Errori).", Format.Number(Failed)));
+            if (NotProcessed > 0) parts.Add(L.F("{0} file non elaborati.", Format.Number(NotProcessed)));
+            if (MetadataErrors.Count > 0) parts.Add(L.F("{0} cartelle/date non impostate.", Format.Number(MetadataErrors.Count)));
+            if (Cancelled) return L.F("ANNULLATO dall'utente. {0}", string.Join(" ", parts));
+            if (AbortReason is not null) return L.F("INTERROTTO: {0} {1}", AbortReason, string.Join(" ", parts));
             if (Failed == 0 && NotProcessed == 0 && MetadataErrors.Count == 0)
-                return "COMPLETATO CON AVVISI: copiato tutto ciò che era copiabile. " + string.Join(" ", parts);
-            return "TERMINATO CON ERRORI. " + string.Join(" ", parts);
+                return L.F("COMPLETATO CON AVVISI: copiato tutto ciò che era copiabile. {0}", string.Join(" ", parts));
+            return L.F("TERMINATO CON ERRORI. {0}", string.Join(" ", parts));
         }
     }
 }

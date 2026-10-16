@@ -112,7 +112,7 @@ public sealed class RemoteScanParser
         if (type.StartsWith("regular", StringComparison.Ordinal)) _files.Add(new RemoteFile(rel, size, mtime, frac));
         else if (type.SequenceEqual("directory")) _dirs.Add(new RemoteDir(rel, mtime, frac));
         else if (type.SequenceEqual("symbolic link")) _links.Add(rel);
-        else Raw($"(tipo ignorato: {type}) {rel}");
+        else Raw(L.F("(tipo ignorato: {0}) {1}", type.ToString(), rel));
         return true;
     }
 
@@ -164,37 +164,42 @@ public sealed class RemoteScanParser
         if (!_cdError)
         {
             if (!_exitSeen)
-                problems.Add("la scansione si è interrotta prima della fine (connessione persa o telefono che non risponde)");
+                problems.Add(L.T("la scansione si è interrotta prima della fine (connessione persa o telefono che non risponde)"));
             if (_rootDenied)
-                problems.Add("Android non permette di leggere la cartella scelta (permesso negato): scegline una accessibile, ad es. /sdcard/...");
+                problems.Add(L.T("Android non permette di leggere la cartella scelta (permesso negato): scegline una accessibile, ad es. /sdcard/..."));
             if (_fatal.Count > 0)
-                problems.Add($"il telefono ha segnalato {_fatal.Count} errori durante la scansione, ad es.: \"{Shorten(_fatal[0])}\"");
+                problems.Add(L.F("il telefono ha segnalato {0} errori durante la scansione, ad es.: \"{1}\"", _fatal.Count, Shorten(_fatal[0])));
             if (_unparsed.Count > 0)
-                problems.Add($"{_unparsed.Count} righe non interpretabili (nomi con caratteri di \"a capo\"?), ad es.: \"{Shorten(_unparsed[0])}\"");
+                problems.Add(L.F("{0} righe non interpretabili (nomi con caratteri di \"a capo\"?), ad es.: \"{1}\"", _unparsed.Count, Shorten(_unparsed[0])));
             if (!_errEnd)
-                problems.Add("l'elenco degli errori del telefono è incompleto (memoria del telefono piena?)");
+                problems.Add(L.T("l'elenco degli errori del telefono è incompleto (memoria del telefono piena?)"));
             if (found < 0)
-                problems.Add("manca il conteggio indipendente degli elementi trovati");
+                problems.Add(L.T("manca il conteggio indipendente degli elementi trovati"));
             if (_batches == 0)
-                problems.Add("il telefono non ha restituito alcun blocco di dati");
+                problems.Add(L.T("il telefono non ha restituito alcun blocco di dati"));
             if (_batches != _batchEnds)
-                problems.Add($"{_batches - _batchEnds} blocchi di dati aperti ma mai chiusi (processo interrotto sul telefono)");
+                problems.Add(L.F("{0} blocchi di dati aperti ma mai chiusi (processo interrotto sul telefono)", _batches - _batchEnds));
             if (found >= 0 && found != _declared)
-                problems.Add($"conteggio non corrispondente: find ha trovato {found} elementi ma ne sono stati passati {_declared} alla lettura dei dati");
+                problems.Add(L.F("conteggio non corrispondente: find ha trovato {0} elementi ma ne sono stati passati {1} alla lettura dei dati", found, _declared));
             if (_declared != _received + _vanished.Count)
-                problems.Add($"conteggio non corrispondente: dichiarati {_declared} elementi, ricevuti {_received}" +
-                             (_vanished.Count > 0 ? $" (+{_vanished.Count} spariti durante la scansione)" : ""));
+                problems.Add(_vanished.Count > 0
+                    ? L.F("conteggio non corrispondente: dichiarati {0} elementi, ricevuti {1} (+{2} spariti durante la scansione)", _declared, _received, _vanished.Count)
+                    : L.F("conteggio non corrispondente: dichiarati {0} elementi, ricevuti {1}", _declared, _received));
 
             bool findErrorsExplained = _permission.Count > 0 || _vanishedDirs.Count > 0 || _rootDenied;
             if (_findExit is int fe && fe != 0 && (fe > 128 || !findErrorsExplained))
-                problems.Add($"find è terminato con codice {fe}" + (fe > 128 ? " (processo interrotto)" : " senza un errore che lo spieghi"));
+                problems.Add(fe > 128
+                    ? L.F("find è terminato con codice {0} (processo interrotto)", fe)
+                    : L.F("find è terminato con codice {0} senza un errore che lo spieghi", fe));
             if (_xargsExit is null)
-                problems.Add("manca l'esito della lettura dei dati (xargs)");
+                problems.Add(L.T("manca l'esito della lettura dei dati (xargs)"));
             else if (_xargsExit is int xe && xe != 0)
             {
                 bool statErrorsExplained = _vanished.Count > 0 || _permission.Count > 0;
                 if (xe != 123 || !statErrorsExplained)
-                    problems.Add($"la lettura dei dati (xargs) è terminata con codice {xe}" + (xe > 128 ? " (processo interrotto)" : ""));
+                    problems.Add(xe > 128
+                        ? L.F("la lettura dei dati (xargs) è terminata con codice {0} (processo interrotto)", xe)
+                        : L.F("la lettura dei dati (xargs) è terminata con codice {0}", xe));
             }
         }
 

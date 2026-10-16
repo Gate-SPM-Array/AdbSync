@@ -11,31 +11,48 @@ public static class PlanBuilder
         SyncOptions options,
         IEnumerable<RemoteDir>? remoteDirs = null,
         IReadOnlyList<string>? permissionDenied = null,
-        IReadOnlySet<string>? knownDifferent = null)
+        IReadOnlySet<string>? knownDifferent = null,
+        IReadOnlySet<string>? unreadable = null)
     {
         var filter = new PathFilter(options.ExcludePatterns);
         var items = new List<SyncItem>();
         var claimed = new Dictionary<string, SyncItem>(StringComparer.OrdinalIgnoreCase);
-        int excluded = 0;
+        int excluded = 0, excludedLocal = 0;
+        var excludedLocalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var r in remoteFiles.OrderBy(f => f.RelativePath, StringComparer.Ordinal))
         {
-            if (filter.IsExcluded(r.RelativePath) && !r.RelativePath.EndsWith(LocalScanner.TempSuffix, StringComparison.OrdinalIgnoreCase))
-            { excluded++; continue; }
+            if (!r.RelativePath.EndsWith(LocalScanner.TempSuffix, StringComparison.OrdinalIgnoreCase) && filter.Match(r.RelativePath) is { } rule)
+            {
+                // Escluso: resta visibile (categoria "Esclusi") con la regola responsabile, ma non viene mai toccato.
+                excluded++;
+                var (exRel, exSan) = PathMapper.ToLocalRelative(r.RelativePath);
+                local.Files.TryGetValue(exRel, out var exLocal);
+                if (exLocal is not null) excludedLocalPaths.Add(exRel);
+                items.Add(new SyncItem
+                {
+                    RelativePath = r.RelativePath, LocalRelativePath = exRel, Remote = r, Local = exLocal,
+                    Category = ItemCategory.Excluded, Action = ItemAction.Skip, NameWasSanitized = exSan, ExcludedBy = rule,
+                    Reason = options.Diagnostic ? L.F("escluso dalla regola {0}", rule) : "",
+                });
+                continue;
+            }
 
             var (localRel, sanitized) = PathMapper.ToLocalRelative(r.RelativePath);
             string? blocked = r.RelativePath.EndsWith(LocalScanner.TempSuffix, StringComparison.OrdinalIgnoreCase)
-                ? $"il nome termina con \"{LocalScanner.TempSuffix}\", riservato ai file temporanei del programma"
+                ? L.F("il nome termina con \"{0}\", riservato ai file temporanei del programma", LocalScanner.TempSuffix)
                 : UnderReparse(localRel, local.ReparseDirectories) is { } rp
-                    ? $"sul PC la cartella \"{rp}\" è un collegamento (junction/symlink): non si scrive fuori dalla destinazione"
-                    : null;
+                    ? L.F("sul PC la cartella \"{0}\" è un collegamento (junction/symlink): non si scrive fuori dalla destinazione", rp)
+                    : unreadable?.Contains(r.RelativePath) == true
+                        ? L.T("Android non permette di leggere questo file (permesso negato, visto durante la copia)")
+                        : null;
             if (blocked is not null)
             {
                 items.Add(new SyncItem
                 {
                     RelativePath = r.RelativePath, LocalRelativePath = localRel, Remote = r,
                     Category = ItemCategory.Blocked, Action = ItemAction.Skip, NameWasSanitized = sanitized,
-                    Reason = "non copiabile: " + blocked, Error = "Non copiabile: " + blocked,
+                    Reason = L.F("non copiabile: {0}", blocked), Error = L.F("Non copiabile: {0}", blocked),
                 });
                 continue;
             }
@@ -49,8 +66,8 @@ public static class PlanBuilder
                     Category = ItemCategory.Collision,
                     Action = ItemAction.Skip,
                     NameWasSanitized = sanitized,
-                    Reason = "collisione di nomi su Windows",
-                    Error = $"Su Windows coincide con \"{first.RelativePath}\" (maiuscole/minuscole o caratteri non ammessi)",
+                    Reason = L.T("collisione di nomi su Windows"),
+                    Error = L.F("Su Windows coincide con \"{0}\" (maiuscole/minuscole o caratteri non ammessi)", first.RelativePath),
                 });
                 continue;
             }
@@ -71,15 +88,16 @@ public static class PlanBuilder
                 _ => ItemAction.Skip,
             };
             bool knownDiff = false;
-            if (category == ItemCategory.DateOnly && knownDifferent?.Contains(localRel) == true)
+            if (category is ItemCategory.DateOnly or ItemCategory.Identical && knownDifferent?.Contains(localRel) == true)
             {
-                // già verificato in questa sessione: il contenuto è diverso → non si ritocca e non si riverifica
+                // già verificato in questa sessione (allineamento date o verifica del backup): il contenuto è diverso
+                // → non si ritocca e non si riverifica; si ricopia solo per scelta esplicita
                 category = ItemCategory.Conflict;
                 action = options.OverwriteConflicts ? ItemAction.Copy : ItemAction.Skip;
-                reason = "stessa dimensione ma contenuto diverso (verificato): " + reason;
+                reason = L.F("stessa dimensione ma contenuto diverso (verificato): {0}", reason);
                 knownDiff = true;
             }
-            if (action == ItemAction.FixTimes && options.Diagnostic) reason += "; date da allineare a quelle del telefono";
+            if (action == ItemAction.FixTimes && options.Diagnostic) reason += L.T("; date da allineare a quelle del telefono");
             var item = new SyncItem
             {
                 RelativePath = r.RelativePath,
@@ -90,15 +108,27 @@ public static class PlanBuilder
                 NameWasSanitized = sanitized,
                 Action = action,
                 Reason = reason,
-                Error = knownDiff ? "Contenuto diverso dal telefono (verificato): date non modificate" : null,
+                Error = knownDiff ? L.T("Contenuto diverso dal telefono (verificato): date non modificate") : null,
             };
             claimed[localRel] = item;
             items.Add(item);
         }
 
+        string onlyOnPcReason = L.T("presente solo sul PC (mai cancellato)");
         foreach (var lf in local.Files.Values.OrderBy(f => f.RelativePath, StringComparer.Ordinal))
         {
-            if (claimed.ContainsKey(lf.RelativePath) || filter.IsExcluded(lf.RelativePath)) continue;
+            if (claimed.ContainsKey(lf.RelativePath) || excludedLocalPaths.Contains(lf.RelativePath)) continue;
+            if (filter.Match(lf.RelativePath) is { } localRule)
+            {
+                excludedLocal++;
+                items.Add(new SyncItem
+                {
+                    RelativePath = lf.RelativePath, LocalRelativePath = lf.RelativePath, Local = lf,
+                    Category = ItemCategory.Excluded, Action = ItemAction.Skip, ExcludedBy = localRule,
+                    Reason = options.Diagnostic ? L.F("solo sul PC, escluso dalla regola {0}", localRule) : "",
+                });
+                continue;
+            }
             items.Add(new SyncItem
             {
                 RelativePath = lf.RelativePath,
@@ -106,7 +136,7 @@ public static class PlanBuilder
                 Local = lf,
                 Category = ItemCategory.OnlyOnPc,
                 Action = ItemAction.Skip,
-                Reason = "presente solo sul PC (mai cancellato)",
+                Reason = onlyOnPcReason,
             });
         }
 
@@ -118,11 +148,12 @@ public static class PlanBuilder
             LocalRoot = localRoot,
             Items = items,
             Directories = dirs,
-            RemoteFileCount = items.Count(i => i.Remote is not null) + excluded,
+            RemoteFileCount = items.Count(i => i.Remote is not null),
             RemoteDirCount = remoteDirs?.Count(d => d.RelativePath.Length > 0) ?? 0,
             LocalFileCount = local.Files.Count,
             LocalDirCount = local.Directories.Count(d => d.Key.Length > 0),
             ExcludedCount = excluded,
+            ExcludedLocalCount = excludedLocal,
             StaleTempFiles = local.StaleTempFiles,
             PermissionDenied = permissionDenied ?? Array.Empty<string>(),
         };
@@ -193,7 +224,7 @@ public static class PlanBuilder
 
     public static (ItemCategory Category, string Reason) ClassifyWithReason(RemoteFile r, LocalFile? lf, SyncOptions o, bool withReason = true)
     {
-        if (lf is null) return (ItemCategory.New, "presente solo sul telefono");
+        if (lf is null) return (ItemCategory.New, L.T("presente solo sul telefono"));
 
         long diff = lf.MtimeUnix - r.MtimeUnix; // > 0: PC più recente
         bool timeEqual = TimesEqual(lf.MtimeUnix, r.MtimeUnix, o);
@@ -205,13 +236,15 @@ public static class PlanBuilder
             if (!sizeEqual && timeEqual) return (ItemCategory.Changed, "");
             return (sizeEqual ? ItemCategory.DateOnly : ItemCategory.Conflict, "");
         }
-        string facts = $"dimensione telefono {r.Size} / PC {lf.Size}, data PC − telefono = {diff} s";
+        string facts = L.F("dimensione telefono {0} / PC {1}, data PC − telefono = {2} s", r.Size, lf.Size, diff);
 
         if (sizeEqual && (timeEqual || o.CompareMode == CompareMode.SizeOnly))
-            return (ItemCategory.Identical, $"identico ({facts}{(o.CompareMode == CompareMode.SizeOnly && !timeEqual ? ", confronto solo dimensione" : "")})");
-        if (!timeEqual && diff < 0) return (ItemCategory.Changed, $"telefono più recente ({facts})");
-        if (!sizeEqual && timeEqual) return (ItemCategory.Changed, $"stessa data ma dimensione diversa: vale il telefono ({facts})");
-        if (sizeEqual) return (ItemCategory.DateOnly, $"stessa dimensione, PC più recente ({facts})");
-        return (ItemCategory.Conflict, $"dimensione diversa e PC più recente ({facts})");
+            return (ItemCategory.Identical, o.CompareMode == CompareMode.SizeOnly && !timeEqual
+                ? L.F("identico ({0}, confronto solo dimensione)", facts)
+                : L.F("identico ({0})", facts));
+        if (!timeEqual && diff < 0) return (ItemCategory.Changed, L.F("telefono più recente ({0})", facts));
+        if (!sizeEqual && timeEqual) return (ItemCategory.Changed, L.F("stessa data ma dimensione diversa: vale il telefono ({0})", facts));
+        if (sizeEqual) return (ItemCategory.DateOnly, L.F("stessa dimensione, PC più recente ({0})", facts));
+        return (ItemCategory.Conflict, L.F("dimensione diversa e PC più recente ({0})", facts));
     }
 }

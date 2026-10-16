@@ -61,10 +61,10 @@ public static class AppPaths
             {
                 Directory.CreateDirectory(DataDirectory);
                 File.Copy(LegacySettingsFile, SettingsFile);
-                msgs.Add("Impostazioni importate da " + LegacySettingsFile);
+                msgs.Add(L.F("Impostazioni importate da {0}", LegacySettingsFile));
             }
         }
-        catch (Exception ex) { msgs.Add("Importazione impostazioni non riuscita: " + ex.Message); }
+        catch (Exception ex) { msgs.Add(L.F("Importazione impostazioni non riuscita: {0}", ex.Message)); }
 
         try
         {
@@ -73,10 +73,10 @@ public static class AppPaths
             if (!File.Exists(Path.Combine(PlatformToolsDirectory, adbName)) && File.Exists(Path.Combine(legacyTools, adbName)))
             {
                 CopyDirectory(legacyTools, PlatformToolsDirectory);
-                msgs.Add($"platform-tools copiate da {legacyTools} nella cartella del programma.");
+                msgs.Add(L.F("platform-tools copiate da {0} nella cartella del programma.", legacyTools));
             }
         }
-        catch (Exception ex) { msgs.Add("Copia platform-tools non riuscita (verranno usate quelle esistenti): " + ex.Message); }
+        catch (Exception ex) { msgs.Add(L.F("Copia platform-tools non riuscita (verranno usate quelle esistenti): {0}", ex.Message)); }
         return msgs;
     }
 

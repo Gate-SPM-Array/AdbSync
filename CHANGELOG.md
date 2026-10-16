@@ -1,5 +1,115 @@
 # Changelog
 
+Regola: ogni versione consegnata ha un numero diverso; anche una modifica minima del codice produce una nuova versione con la sua voce qui sotto.
+
+## v0.1.8 — 2026-10-16
+
+### Novità
+- **Verifica il backup.** Per ogni file presente su telefono e PC con stesso nome, dimensione e data, confronta l'hash calcolato sul telefono con quello del PC, usando l'elenco acquisito (nessuna nuova scansione).
+  - *Rapida*: primi e ultimi 64 KB di ogni file. *Completa*: MD5 dell'intero file. Hash del telefono a blocchi, un comando ogni 200 file.
+  - Non modifica nulla. I file diversi sono elencati nella scheda Errori e in `verifica_backup_<data>.csv` con i due hash; si ricopiano dal telefono solo dopo conferma. Nei confronti successivi restano segnalati come conflitto.
+  - Il risultato dice anche se il backup è completo: i file del telefono che mancano sul PC o hanno dimensione o data diverse vengono contati. Una verifica rapida superata dice solo che inizio e fine coincidono, non "identici".
+  - Dove: *Strumenti → Verifica il backup*, la finestra dopo la copia, riga di comando `adbsync-cli verify [--quick]` (codice di uscita 0 solo se il backup è completo e verificato).
+- **Verifica MD5 visibile.** Il riepilogo dice su quanti file copiati l'MD5 è risultato uguale al telefono e quanti file avevano una copia corrotta, poi ritentata; senza verifica MD5 dice che è stata controllata solo la dimensione. Il report CSV ha la colonna MD5.
+- **Permesso negato in lettura** (tipico di `Android/data`): il file conta come *non copiabile*, non come errore. Non viene ritentato, l'esito è "COMPLETATO CON AVVISI" e *Riprova* non lo ripropone finché il programma resta aperto.
+- **Aiuto → Prepara log per segnalazione**: zip con il log della sessione e il SystemLOG, senza report né elenchi dei file.
+
+### Corretto
+- **MD5 dei file con `\` nel nome**: `md5sum` ora legge il file da stdin. Con il nome come argomento l'output cambiava formato e la verifica falliva.
+- Il numero di serie del telefono non compare più nei log (riga "Confronto: telefono …"): solo modello e ultime 4 cifre.
+
+### Altro
+- Rilettura indipendente del codice prima della pubblicazione: la verifica mantiene le scelte manuali "Non copiare"; nessuna operazione può partire mentre un'altra si sta preparando; seriali duplicati di adb non svuotano più l'elenco dei telefoni; "No" alla ricopia dei file diversi viene ricordato; gli MD5 occupano 16 byte per file e sono registrati solo per i file davvero scritti; lo zip per le segnalazioni non contiene il nome del telefono.
+- Test: 139, di cui 13 nuovi (verifica del backup rapida e completa, backup incompleto mai dato per completo, file non verificabili, MD5 nel riepilogo e nel report, copie corrotte contate, permesso negato non riproposto, MD5 con `\` nel nome con la vera mksh + toybox, zip per le segnalazioni, numero di serie mascherato).
+
+## v0.1.7 — 2026-10-16
+
+### Novità
+- **Log divisi per sessione.** Prima tutti i log, i report e la diagnostica finivano insieme nella cartella `logs`. Ora ogni sessione ha la sua cartella: `logs\<data_ora>_<produttore-modello>_<nome del telefono>\`, per esempio `2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-Mario`.
+  - Una sessione inizia quando il programma è aperto e si collega un telefono, e dura finché il programma resta aperto con lo stesso telefono. Un telefono diverso apre una nuova sessione. Ogni avvio di `adbsync-cli` è una sessione.
+  - Dentro la cartella: `sessione.log`, i report CSV, l'elenco dei nomi convertiti e le cartelle della modalità diagnostica.
+  - Il nome del telefono è quello dato nelle impostazioni di Android (o il nome Bluetooth). Il numero di serie non compare, salvo le ultime 4 cifre se sono collegati due telefoni dello stesso modello.
+- **SystemLOG** (`logs\SystemLOG\system_<anno-mese>.log`, un file al mese): avvio e chiusura del programma con versione, Windows, .NET e lingua; adb; telefoni rilevati e scollegati; cartella di sessione aperta; errori imprevisti e crash, anche prima che compaia la finestra. Interfaccia grafica e riga di comando possono scriverci insieme (`[GUI]`, `[CLI]`).
+- **Stato della cartella log all'apertura**: numero di sessioni e dimensione totale, nel riquadro Stato e nel SystemLOG. Nessuna cancellazione automatica.
+- Menu *File → Apri cartella della sessione corrente*.
+
+### Altro
+- I log delle versioni precedenti restano dove sono.
+- Test: 126, di cui 14 nuovi (nome della cartella, lettura del nome del telefono anche con la vera mksh, sessioni, SystemLOG scritto da due programmi insieme, statistiche della cartella).
+
+## v0.1.6 — 2026-10-16
+
+Risolve il "loop" dei file grandi (copia che si fermava intorno a 1,8–2,2 GB e ripartiva da zero). La causa, trovata con il diario della 0.1.5D, era il disco di destinazione del PC: alcune scritture restavano ferme da 5 a 55 s, il programma le scambiava per uno stallo del telefono, cancellava il parziale e ricominciava.
+
+### Novità
+- **Due timeout separati.**
+  - *Timeout stallo telefono* (finestra principale, minimo 1 s, predefinito 30): conta solo il tempo in cui il telefono non manda dati.
+  - *Timeout scrittura su disco (PC)* (menu *Strumenti*, minimo 30 s, predefinito 120): quanto può restare ferma una singola scrittura sul disco del PC. CLI: `--disk-stall <secondi>`.
+  - Il tempo di scrittura su disco non conta più come stallo del telefono. Un blocco del disco oltre il suo limite rimette il file in coda senza far scattare il controllo del telefono.
+- **Stato "Disco di destinazione lento"**: dopo 3 s di scrittura ferma lo stato lo dice, con i secondi trascorsi e il limite, e la copia aspetta.
+- **Ripresa senza riscrivere.** Dopo uno stallo o un errore di collegamento il parziale `.adbsync-part` viene tenuto. Al tentativo successivo il telefono rimanda il file dall'inizio (il protocollo ADB non permette di partire a metà), ma i byte già scritti sul PC, meno 1 MiB di margine, non vengono riscritti: il disco lavora molto meno.
+  - Il parziale si riusa solo se dimensione e data sul telefono sono rimaste uguali.
+  - Copia corrotta (MD5 diverso), errore del disco locale o errore definitivo: il parziale viene cancellato e si riparte da zero.
+  - Alla fine della copia i parziali dei file non completati vengono cancellati.
+
+### Diagnosi
+- Il diario delle pause e degli stalli (`[diagnosi] …`) e il protocollo v2 della 0.1.5D restano. Il costo è trascurabile: qualche lettura di contatori per ogni blocco di dati.
+
+### Altro
+- L'etichetta "Timeout stallo (s)" diventa "Timeout stallo telefono (s)". Il minimo di 1 s ora vale anche per il valore salvato nelle impostazioni.
+- Test: 112, di cui 5 nuovi (disco lento entro il limite, disco bloccato oltre il limite, ripresa senza riscrivere, copia corrotta mai ripresa, parziali cancellati).
+
+## v0.1.5D — 2026-10-16 (diagnosi)
+
+Versione di diagnosi, cioè la 0.1.5 più gli strumenti per capire le pause nei trasferimenti dei file grandi. Il comportamento di copia non cambia.
+
+### Diagnosi
+- **Diario delle pause nel log.** Ogni interruzione del flusso di dati oltre 0,5 s viene registrata come `[diagnosi] pausa di … ms`, con:
+  - file, byte ricevuti sul totale;
+  - tempo passato a **scrivere su disco** e tempo passato ad **aspettare dati da adb**;
+  - pause del garbage collector .NET e stato del thread pool, cioè le possibili cause interne al programma.
+- **Dettaglio di ogni stallo** (`[diagnosi] stallo …`): se in quel momento il programma stava scrivendo su disco oppure aspettava dati da adb, con gli stessi indicatori del processo.
+- **Protocollo di trasferimento ADB v2**, lo stesso di `adb pull`, attivabile da *Strumenti → Protocollo di trasferimento ADB v2*. Riga di comando: `--v2`. Se il telefono non lo supporta si torna da soli alla v1. Il protocollo in uso è scritto nel log all'inizio della copia.
+- Test: 107.
+
+## v0.1.5 — 2026-10-15
+
+### Migliorato
+- **Elenco dei nomi convertiti: sostituzioni in chiaro.** I caratteri sostitutivi (`？` `．` `＜`…) sono quasi identici agli originali e non si notano. Ora ogni riga di `nomi_convertiti_<data>.txt` ha una quinta colonna che li descrive, per esempio `"?" → "？" (U+FF1F)`, `punto finale → "．" (U+FF0E)` o nome riservato con `_` davanti. In testa al file c'è una riga che spiega il perché.
+
+### Altro
+- Un test verifica che il numero di versione sia lo stesso in progetti, interfaccia, riga di comando e CHANGELOG.
+- Test: 104.
+
+## v0.1.4 — 2026-10-15
+
+### Novità
+- **Barra dei menu**:
+  - *File*: cartelle dei log e del programma, Esci;
+  - *Strumenti*: Esclusioni e comandi adb;
+  - *🌐 Lingua*: scelta della lingua (sostituisce la casella in alto a destra) e cartella delle lingue;
+  - *Aiuto*: guida online (F1), guida nel programma (README), pagina del progetto su GitHub, segnalazioni, versioni, Informazioni.
+  - Gli indirizzi non sono scritti nel codice: si leggono da `adbsync.ini` accanto al programma, e chi pubblica una versione derivata cambia solo quel file.
+- **Pulsanti più chiari**: 🔍 *Confronta* (analizza, non scrive nulla), ▶ *Sincronizza* (avvia la copia), ■ *Annulla* (ferma). Tolti i numeri ①②.
+
+## v0.1.3 — 2026-10-15
+
+### Novità
+- **Lingue con file esterni.** Tutti i testi (interfaccia, log, riepiloghi, riga di comando) passano dai file `lang\<codice>.json` accanto al programma, modificabili da chiunque senza ricompilare.
+  - Incluso l'**inglese** (`lang\en.json`); l'italiano resta incorporato e predefinito.
+  - La scelta si applica al riavvio. CLI: `--lang en`, la variabile `ADBSYNC_LANG` oppure la lingua scelta nell'interfaccia grafica.
+  - Un testo non tradotto resta in italiano; una traduzione che altera i segnaposto `{0}` viene ignorata e segnalata nel log.
+  - Numeri e date seguono il formato della lingua.
+- **File esclusi visibili.** Prima i file scartati dalle regole di esclusione (per esempio le miniature `.thumbnails/`) sparivano senza traccia, e "0 da copiare" sembrava un errore della scansione.
+  - Ora compaiono nella categoria **Esclusi**, con la regola che li ha esclusi; sono compresi i file presenti solo sul PC.
+  - I conteggi sono nel riepilogo del confronto e nel log, regola per regola.
+  - La finestra Esclusioni spiega le regole predefinite e che le regole valgono a partire dalla cartella scelta sul telefono.
+- **Elenco dei nomi convertiti.** Quando un nome contiene caratteri non ammessi su Windows (exFAT/NTFS), ogni sincronizzazione scrive `logs\nomi_convertiti_<data>.txt`, con il tipo, il percorso originale sul telefono, il percorso salvato sul PC e l'esito, anche per le cartelle. Il percorso del file compare nel riepilogo finale e nella riga di comando.
+
+### Altro
+- Il controllo della risposta del telefono usa `printf` invece di `echo`.
+- Test: 96, di cui 17 nuovi per lingue, esclusi e nomi convertiti. Un test verifica che ogni testo del codice sia tradotto in `en.json` con gli stessi segnaposto.
+
 ## v0.1.2 — 2026-10-15
 
 ### Novità

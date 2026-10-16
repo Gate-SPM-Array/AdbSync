@@ -3,7 +3,7 @@
   "language": "English",
   "culture": "en-GB",
   "translators": "Claude (Anthropic)",
-  "app_version": "0.1.6",
+  "app_version": "0.1.7",
   "strings": {
     "  ... e altri {0} (elenco completo con la modalità diagnostica).": "  ... and {0} more (full list with diagnostic mode).",
     "  link: {0}": "  link: {0}",
@@ -34,7 +34,6 @@
     "[diagnosi] pausa di {0} ms su {1} a {2} di {3}: scrittura su disco {4} ms, attesa dati da adb {5} ms; {6}": "[diagnosis] pause of {0} ms on {1} at {2} of {3}: disk write {4} ms, waiting for data from adb {5} ms; {6}",
     "[diagnosi] stallo su {0} a {1} di {2} dopo {3} ms senza dati: {4}; {5}": "[diagnosis] stall on {0} at {1} of {2} after {3} ms without data: {4}; {5}",
     "[telefono] {0}": "[phone] {0}",
-    "A ogni confronto salva in logs\\diagnostica_<data> l'elenco completo dei file del telefono, del PC e del piano con il motivo di ogni decisione.": "At every comparison saves to logs\\diagnostica_<date> the full list of phone files, PC files and the plan, with the reason for each decision.",
     "accesso negato sul PC: {0}": "access denied on the PC: {0}",
     "acquisito alle {0:HH:mm}": "acquired at {0:HH:mm}",
     "adb arrestato — premi Aggiorna per riavviarlo": "adb stopped — press Refresh to restart it",
@@ -470,6 +469,22 @@
     "Timeout scrittura su disco (PC)": "PC disk write timeout",
     "Secondi di attesa massima per una singola scrittura sul disco di destinazione (minimo {0}).": "Maximum seconds to wait for a single write to the destination disk (minimum {0}).",
     "Timeout scrittura su disco (PC) impostato: {0} s": "PC disk write timeout set: {0} s",
-    "Timeout scrittura su disco (PC): {0} s...": "PC disk write timeout: {0} s..."
+    "Timeout scrittura su disco (PC): {0} s...": "PC disk write timeout: {0} s...",
+    "A ogni confronto salva nella cartella della sessione (logs\\<sessione>\\diagnostica_<data>) l'elenco completo dei file del telefono, del PC e del piano con il motivo di ogni decisione.": "At every comparison saves to the session folder (logs\\<session>\\diagnostica_<date>) the full list of phone files, PC files and the plan, with the reason for each decision.",
+    "Sessione di log aperta: {0}": "Log session opened: {0}",
+    "Cartella di sessione non creata ({0}): i messaggi restano nel log di sistema.": "Session folder not created ({0}): messages stay in the system log.",
+    "Errore imprevisto, il programma si chiude: {0}": "Unexpected error, the program is closing: {0}",
+    "Errore imprevisto in un'attività in background: {0}": "Unexpected error in a background task: {0}",
+    "AdbSync chiuso.": "AdbSync closed.",
+    "Sistema: {0}, {1}": "System: {0}, {1}",
+    "Apri cartella della sessione corrente": "Open current session folder",
+    "Telefono rilevato: {0} — {1}": "Phone detected: {0} — {1}",
+    "Telefono scollegato: {0}": "Phone disconnected: {0}",
+    "Nome del telefono non letto ({0}): la cartella di sessione usa solo il modello.": "Phone name not read ({0}): the session folder uses the model only.",
+    "AdbSync {0} — telefono: {1}": "AdbSync {0} — phone: {1}",
+    "Cartella log: {0} sessioni, {1} in totale.": "Log folder: {0} sessions, {1} in total.",
+    "Più {0} file delle versioni precedenti.": "Plus {0} files from previous versions.",
+    "adbsync-cli {0}: comando {1}": "adbsync-cli {0}: command {1}",
+    "adbsync-cli {0} — telefono: {1}": "adbsync-cli {0} — phone: {1}"
   }
 }

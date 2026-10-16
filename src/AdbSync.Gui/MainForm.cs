@@ -8,12 +8,16 @@ namespace AdbSync.Gui;
 
 internal sealed class MainForm : Form
 {
-    private static readonly string AppVersion = "0.1.6";
+    private static readonly string AppVersion = "0.1.7";
 
     // --- stato ---
     private readonly IReadOnlyList<string> _migration = Program.MigrationMessages; // eseguita in Program.Main, prima di tutto
     private readonly AppSettings _settings = AppSettings.Load();
-    private readonly SyncLogger _log = new(SyncLogger.DefaultLogDirectory);
+    private readonly SyncLogger _log = Program.Log;
+    private ToolStripMenuItem? _menuSessionFolder;
+    private Task? _logSessionStart;
+    private string? _logSessionSerial;
+    private Dictionary<string, (string Model, string State)> _knownDevices = new();
     private readonly ConcurrentQueue<LogEntry> _pendingLog = new();
     private AdbEnvironment? _env;
     private SyncPlan? _plan;
@@ -101,12 +105,14 @@ internal sealed class MainForm : Form
         WireEvents();
 
         _log.EntryWritten += e => _pendingLog.Enqueue(e);
-        _log.Info(L.F("AdbSync {0} — dati in {1}: {2}", AppVersion,
+        _log.System(LogLevel.Info, L.F("AdbSync {0} — dati in {1}: {2}", AppVersion,
             AppPaths.IsPortable ? L.T("cartella del programma (portable)") : L.T("AppData (cartella del programma non scrivibile)"),
             Path.GetDirectoryName(AppPaths.DataDirectory)));
-        foreach (var m in _migration) _log.Info(m);
-        if (L.Code != L.DefaultCode) _log.Info($"Language: {L.Name} ({L.Code})");
-        foreach (var m in _langMessages) _log.Warn(m);
+        _log.System(LogLevel.Info, L.F("Sistema: {0}, {1}", Environment.OSVersion.VersionString, System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription));
+        foreach (var m in _migration) _log.System(LogLevel.Info, m);
+        if (L.Code != L.DefaultCode) _log.System(LogLevel.Info, $"Language: {L.Name} ({L.Code})");
+        foreach (var m in _langMessages) _log.System(LogLevel.Warning, m);
+        _ = ShowLogFolderStatsAsync();
         _uiTimer.Tick += (_, _) => UiTick();
         _uiTimer.Start();
         Shown += async (_, _) => await InitAdbAsync(interactive: true);
@@ -191,7 +197,7 @@ internal sealed class MainForm : Form
         tip.SetToolTip(_chkVerify, L.T("Calcola l'MD5 sul telefono e sul PC per ogni file copiato. Garantisce l'integrità ma rallenta."));
         tip.SetToolTip(_numStall, L.T("Se per questi secondi non arriva alcun byte il file è considerato bloccato: viene rimesso in fondo alla coda (senza attese) e ritentato dopo gli altri.\nValori molto bassi (1-3 s) aiutano con molti file bloccati, ma un file grande con pause normali potrebbe ripartire più volte."));
         tip.SetToolTip(_cmbAlign, L.T("Per i file presenti su entrambi con stesso nome e dimensione ma data diversa (es. copiati in passato via MTP).\nRapida: esatta per file fino a 128 KB; per quelli più grandi controlla inizio e fine.\nMD5: legge tutto il file su telefono e PC."));
-        tip.SetToolTip(_chkDiagnostic, L.T("A ogni confronto salva in logs\\diagnostica_<data> l'elenco completo dei file del telefono, del PC e del piano con il motivo di ogni decisione."));
+        tip.SetToolTip(_chkDiagnostic, L.T("A ogni confronto salva nella cartella della sessione (logs\\<sessione>\\diagnostica_<data>) l'elenco completo dei file del telefono, del PC e del piano con il motivo di ogni decisione."));
 
         // --- pulsanti ---
         var actions = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 6 };
@@ -306,6 +312,9 @@ internal sealed class MainForm : Form
     {
         var file = new ToolStripMenuItem(L.T("&File"));
         file.DropDownItems.Add(L.T("Apri cartella log e report"), null, (_, _) => OpenFolder(SyncLogger.DefaultLogDirectory));
+        _menuSessionFolder = new ToolStripMenuItem(L.T("Apri cartella della sessione corrente"), null,
+            (_, _) => { if (_log.LogDirectory is { } d) OpenFolder(d); }) { Enabled = false };
+        file.DropDownItems.Add(_menuSessionFolder);
         file.DropDownItems.Add(L.T("Apri cartella del programma"), null, (_, _) => OpenFolder(AppPaths.BaseDirectory));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(L.T("&Esci"), null, (_, _) => Close());
@@ -491,7 +500,11 @@ internal sealed class MainForm : Form
         // Qualsiasi modifica a percorsi/opzioni di confronto invalida il piano.
         _txtRemote.TextChanged += (_, _) => InvalidatePlan(dropSession: true);
         _txtLocal.TextChanged += (_, _) => InvalidatePlan(dropSession: true);
-        _cmbDevice.SelectedIndexChanged += (_, _) => InvalidatePlan(dropSession: true);
+        _cmbDevice.SelectedIndexChanged += async (_, _) =>
+        {
+            InvalidatePlan(dropSession: true);
+            if (_cmbDevice.SelectedItem is DeviceInfo { IsOnline: true } d) await EnsureLogSessionAsync(d);
+        };
         // le opzioni di confronto ricalcolano il piano dall'elenco già acquisito (nessuna scansione)
         _chkSizeOnly.CheckedChanged += (_, _) => OptionsChanged();
         _chkDst.CheckedChanged += (_, _) => OptionsChanged();
@@ -538,13 +551,13 @@ internal sealed class MainForm : Form
             _env = await Task.Run(() => AdbEnvironment.StartAsync(adb, CancellationToken.None));
             _settings.AdbPath = adb;
             _lblAdb.Text = "adb: " + adb;
-            _log.Info(L.F("adb in uso: {0}", adb));
+            _log.System(LogLevel.Info, L.F("adb in uso: {0}", adb));
         }
         catch (Exception ex)
         {
             _env = null;
             _lblAdb.Text = L.T("adb non avviato");
-            _log.Error(ex.Message);
+            _log.System(LogLevel.Error, ex.Message);
             if (interactive) MessageBox.Show(this, ex.Message, L.T("Errore adb"), MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
@@ -608,7 +621,7 @@ internal sealed class MainForm : Form
             if (_env is not null) AdbEnvironment.KillServer(_env.AdbPath);
             _env = null;
             _lblAdb.Text = L.T("adb arrestato — premi Aggiorna per riavviarlo");
-            _log.Info(L.T("Server adb arrestato."));
+            _log.System(LogLevel.Info, L.T("Server adb arrestato."));
         });
         m.DropDownItems.Add(new ToolStripSeparator());
         m.DropDownItems.Add(L.T("Apri cartella log e report"), null, (_, _) => OpenFolder(SyncLogger.DefaultLogDirectory));
@@ -623,6 +636,7 @@ internal sealed class MainForm : Form
         try
         {
             var devices = await Task.Run(() => _env.GetDevicesAsync(CancellationToken.None));
+            LogDeviceChanges(devices);
             string? keep = (_cmbDevice.SelectedItem as DeviceInfo)?.Serial ?? _settings.LastSerial;
             _cmbDevice.Items.Clear();
             foreach (var d in devices) _cmbDevice.Items.Add(d);
@@ -634,12 +648,65 @@ internal sealed class MainForm : Form
             }
             var sel = devices.FirstOrDefault(d => d.Serial == keep) ?? devices.FirstOrDefault(d => d.IsOnline) ?? devices[0];
             _cmbDevice.SelectedItem = sel;
-            foreach (var d in devices.Where(d => !d.IsOnline)) _log.Warn($"{d.Model}: {d.StateLabel}");
         }
         catch (Exception ex)
         {
-            _log.Error(L.F("Elenco dispositivi non disponibile: {0}", ex.Message));
+            _log.System(LogLevel.Error, L.F("Elenco dispositivi non disponibile: {0}", ex.Message));
         }
+    }
+
+    /// <summary>Nel SystemLOG: telefoni comparsi, scollegati o con stato cambiato (senza numero di serie).</summary>
+    private void LogDeviceChanges(IReadOnlyList<DeviceInfo> devices)
+    {
+        var now = devices.ToDictionary(d => d.Serial, d => (d.Model, d.StateLabel));
+        foreach (var d in devices)
+        {
+            if (_knownDevices.TryGetValue(d.Serial, out var old) && old.State == d.StateLabel) continue;
+            _log.System(d.IsOnline ? LogLevel.Info : LogLevel.Warning, L.F("Telefono rilevato: {0} — {1}", d.Model, d.StateLabel));
+        }
+        foreach (var gone in _knownDevices.Where(k => !now.ContainsKey(k.Key)))
+            _log.System(LogLevel.Info, L.F("Telefono scollegato: {0}", gone.Value.Model));
+        _knownDevices = now;
+    }
+
+    /// <summary>Una cartella di log per sessione: si apre al primo collegamento di un telefono e resta finché il programma è aperto e il telefono è lo stesso.</summary>
+    private Task EnsureLogSessionAsync(DeviceInfo d)
+    {
+        if (_logSessionSerial == d.Serial && _logSessionStart is not null) return _logSessionStart;
+        _logSessionSerial = d.Serial;
+        return _logSessionStart = StartLogSessionAsync(d);
+    }
+
+    private async Task StartLogSessionAsync(DeviceInfo d)
+    {
+        DeviceIdentity id;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var env = _env ?? throw new InvalidOperationException(L.T("adb non avviato"));
+            id = await Task.Run(() => env.OpenDevice(d.Serial, d.ToString()).GetIdentityAsync(d.Model, cts.Token));
+        }
+        catch (Exception ex)
+        {
+            id = DeviceIdentity.Fallback(d.Model);
+            _log.System(LogLevel.Warning, L.F("Nome del telefono non letto ({0}): la cartella di sessione usa solo il modello.", ex.Message));
+        }
+        bool twin = _cmbDevice.Items.OfType<DeviceInfo>().Any(o => o.Serial != d.Serial && o.Model == d.Model);
+        string? dir = _log.StartSession(LogSessions.FolderName(DateTime.Now, id, twin ? LogSessions.SerialSuffix(d.Serial) : null));
+        if (_menuSessionFolder is not null) _menuSessionFolder.Enabled = dir is not null;
+        _log.Info(L.F("AdbSync {0} — telefono: {1}", AppVersion, id.Describe()));
+        if (_env is not null) _log.Info(L.F("adb in uso: {0}", _env.AdbPath));
+    }
+
+    /// <summary>All'apertura: quante sessioni ci sono nella cartella log e quanto occupano (nessuna pulizia automatica).</summary>
+    private async Task ShowLogFolderStatsAsync()
+    {
+        string root = SyncLogger.DefaultLogDirectory;
+        var st = await Task.Run(() => LogSessions.Inspect(root));
+        string text = L.F("Cartella log: {0} sessioni, {1} in totale.", Format.Number(st.Sessions), Format.Bytes(st.Bytes));
+        if (st.OlderFiles > 0) text += " " + L.F("Più {0} file delle versioni precedenti.", Format.Number(st.OlderFiles));
+        _log.System(LogLevel.Info, text + " " + root);
+        if (!_busy) _lblPhase.Text = L.T("Pronto") + " — " + text;
     }
 
     private IRemoteDevice? GetSelectedDevice(bool showErrors)
@@ -689,6 +756,7 @@ internal sealed class MainForm : Form
     {
         var dev = GetSelectedDevice(true);
         if (dev is null) return;
+        if (_cmbDevice.SelectedItem is DeviceInfo info) await EnsureLogSessionAsync(info);
         string remote = _txtRemote.Text.Trim();
         string local = _txtLocal.Text.Trim();
         if (remote.Length == 0) { MessageBox.Show(this, L.T("Indica la cartella sul telefono."), "AdbSync"); return; }
@@ -760,6 +828,7 @@ internal sealed class MainForm : Form
         if (!plan.HasWork) { MessageBox.Show(this, L.T("Niente da fare: la cartella sul PC è già allineata."), "AdbSync"); return; }
         var dev = GetSelectedDevice(true);
         if (dev is null) return;
+        if (_cmbDevice.SelectedItem is DeviceInfo info) await EnsureLogSessionAsync(info);
 
         var age = DateTime.Now - plan.ScannedAt;
         string ageNote = age.TotalMinutes > 60
@@ -1289,6 +1358,5 @@ internal sealed class MainForm : Form
             _cts.Cancel();
         }
         SaveControlsIntoSettings();
-        _log.Dispose();
     }
 }

@@ -1,4 +1,4 @@
-# AdbSync v0.1.6
+# AdbSync v0.1.7
 
 [English](README.md) · **Italiano**
 
@@ -26,7 +26,7 @@ AdbSync\
   adbsync.ini      collegamenti del menu Aiuto (pagina del progetto, guida online, segnalazioni)
   lang\en.json     traduzione inglese (qui si aggiungono altre lingue)
   data\settings.json
-  logs\            log, report CSV, elenchi nomi_convertiti_*, cartelle diagnostica_*
+  logs\            una cartella per sessione + SystemLOG\ (vedi sezione 6)
   platform-tools\  adb.exe e DLL (scaricate da Google)
 ```
 
@@ -34,7 +34,7 @@ Se la cartella non è scrivibile (es. `C:\Program Files`) il programma ripiega s
 La chiave di autorizzazione adb resta nella posizione standard di Windows (`%USERPROFILE%\.android`).
 Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *adb… → Arresta il server adb*.
 
-> Il pacchetto `AdbSync_v0.1.6_win-x64.zip` richiede il **.NET 10 Desktop Runtime x64**, che si scarica da https://dotnet.microsoft.com/download/dotnet/10.0
+> Il pacchetto `AdbSync_v0.1.7_win-x64.zip` richiede il **.NET 10 Desktop Runtime x64**, che si scarica da https://dotnet.microsoft.com/download/dotnet/10.0
 
 ## 2. Uso
 
@@ -124,7 +124,7 @@ Per spostare o cancellare la cartella del programma mentre adb è attivo: menu *
   - i propri file temporanei.
 
   Si modificano con il pulsante *Esclusioni…*. Le regole valgono **a partire dalla cartella scelta sul telefono**: scegliendo `/sdcard/Pictures` la cartella `.thumbnails/` al suo interno è esclusa; scegliendo direttamente `/sdcard/Pictures/.thumbnails`, no. I file esclusi sono contati nel riepilogo del confronto e si vedono con il filtro *Esclusi*: un "niente da copiare" non è mai un mistero.
-- **Elenco dei nomi convertiti**: ogni sincronizzazione con nomi convertiti scrive `logs\nomi_convertiti_<data>.txt` con tipo, percorso originale sul telefono, percorso sul PC, esito e le sostituzioni in chiaro, per esempio `"?" → "？" (U+FF1F)`, cartelle comprese. Così si risale sempre al nome originale di un file.
+- **Elenco dei nomi convertiti**: ogni sincronizzazione con nomi convertiti scrive `nomi_convertiti_<data>.txt` nella cartella della sessione con tipo, percorso originale sul telefono, percorso sul PC, esito e le sostituzioni in chiaro, per esempio `"?" → "？" (U+FF1F)`, cartelle comprese. Così si risale sempre al nome originale di un file.
 
 Il riquadro *Stato* si ridimensiona trascinando il divisore sopra di esso, e la posizione viene ricordata. L'elenco dei trasferimenti in corso mostra sempre tutti i trasferimenti paralleli.
 
@@ -141,7 +141,7 @@ Il riquadro *Stato* si ridimensiona trascinando il divisore sopra di esso, e la 
 | Timeout scrittura su disco (PC) (menu *Strumenti*) | 120 s | minimo 30 s; una scrittura su disco più lenta chiude il trasferimento e rimette il file in coda |
 | Tentativi extra | 5 | |
 | Allinea date stessa dimensione | No | No / Solo dimensione / Verifica rapida / Verifica MD5 completa |
-| Modalità diagnostica | no | a ogni confronto salva in `logs\diagnostica_<data>\` l'elenco completo telefono, l'elenco PC, il piano con il motivo di ogni decisione e i messaggi grezzi del telefono |
+| Modalità diagnostica | no | a ogni confronto salva in `diagnostica_<data>\`, nella cartella della sessione, l'elenco completo telefono, l'elenco PC, il piano con il motivo di ogni decisione e i messaggi grezzi del telefono |
 
 ## 5. Riga di comando
 
@@ -159,10 +159,23 @@ Codici di uscita: `0` tutto eseguito · `1` errori su alcuni file · `2` interro
 
 ## 6. Log e report
 
-- Log completo di ogni sessione: `logs\adbsync_AAAAMMGG_hhmmss.log` nella cartella del programma.
-- Report CSV di ogni sincronizzazione, apribile con Excel: `report_AAAAMMGG_hhmmss.csv`, con l'esito file per file.
+- **Una cartella per sessione.** Una sessione inizia quando il programma è aperto e si collega un telefono, e dura finché il programma resta aperto con lo stesso telefono (uno scollegamento durante la copia non ne apre una nuova). Anche ogni avvio di `adbsync-cli` è una sessione.
+  ```
+  logs\
+    2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-David\
+      sessione.log                     tutto quello che è successo nella sessione
+      report_AAAAMMGG_hhmmss.csv       uno per ogni sincronizzazione, apribile con Excel, esito file per file
+      nomi_convertiti_AAAAMMGG_hhmmss.txt
+      diagnostica_AAAAMMGG_hhmmss\     solo con la modalità diagnostica
+    SystemLOG\
+      system_AAAA-MM.log               un file al mese
+  ```
+  Il nome della cartella è data e ora (così le cartelle sono in ordine cronologico), produttore e modello, e il nome dato al telefono nelle impostazioni di Android (o il suo nome Bluetooth). I caratteri non validi su Windows diventano `-`. Il numero di serie non viene mai usato, salvo le ultime 4 cifre quando sono collegati due telefoni dello stesso modello.
+- **SystemLOG**: quello che non fa parte di una sessione di copia — avvio e chiusura del programma (versione, Windows, .NET, lingua, migrazioni), adb (percorso, server, errori, telefono non autorizzato), telefoni rilevati e scollegati, quale cartella di sessione è stata aperta, errori imprevisti e crash, anche prima che compaia la finestra. Interfaccia grafica e riga di comando possono scriverci insieme; ogni riga dice chi l'ha scritta (`[GUI]`, `[CLI]`).
+- **Nessuna cancellazione automatica.** All'apertura il programma mostra quante sessioni contiene la cartella log e quanto occupa in totale (riquadro Stato e SystemLOG); le sessioni vecchie le cancelli tu quando vuoi. Menu *File*: *Apri cartella log e report* e *Apri cartella della sessione corrente*.
+- I log delle versioni precedenti alla 0.1.7 restano dove sono (direttamente in `logs\`).
 - Impostazioni: `data\settings.json` nella cartella del programma.
-- Modalità diagnostica: `logs\diagnostica_AAAAMMGG_hhmmss\` con `1_telefono.tsv`, `2_pc.tsv`, `3_piano.tsv` e `4_messaggi_telefono.txt`.
+- Modalità diagnostica: `diagnostica_AAAAMMGG_hhmmss\` nella cartella della sessione, con `1_telefono.tsv`, `2_pc.tsv`, `3_piano.tsv` e `4_messaggi_telefono.txt`.
 
 ## 7. Limiti noti di questa versione
 
@@ -185,7 +198,7 @@ src/AdbSync.Core   motore: scansione, confronto, copia robusta (multipiattaforma
 src/AdbSync.Gui    interfaccia Windows Forms
 src/AdbSync.Cli    riga di comando
 lang/              file di traduzione (en.json = riferimento)
-tests/             112 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
+tests/             126 test, incluso un telefono simulato con guasti (stalli, disconnessioni, copie troncate, ...)
 ```
 
 Compilazione: .NET 10 SDK → `dotnet build`. Test: `dotnet test`.

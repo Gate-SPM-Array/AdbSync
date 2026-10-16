@@ -2,6 +2,21 @@
 
 Regola: ogni versione consegnata ha un numero diverso; anche una modifica minima del codice produce una nuova versione con la sua voce qui sotto.
 
+## v0.1.7 — 2026-10-16
+
+### Novità
+- **Log divisi per sessione.** Prima tutti i log, i report e la diagnostica finivano insieme nella cartella `logs`. Ora ogni sessione ha la sua cartella: `logs\<data_ora>_<produttore-modello>_<nome del telefono>\`, per esempio `2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-David`.
+  - Una sessione inizia quando il programma è aperto e si collega un telefono, e dura finché il programma resta aperto con lo stesso telefono. Un telefono diverso apre una nuova sessione. Ogni avvio di `adbsync-cli` è una sessione.
+  - Dentro la cartella: `sessione.log`, i report CSV, l'elenco dei nomi convertiti e le cartelle della modalità diagnostica.
+  - Il nome del telefono è quello dato nelle impostazioni di Android (o il nome Bluetooth). Il numero di serie non compare, salvo le ultime 4 cifre se sono collegati due telefoni dello stesso modello.
+- **SystemLOG** (`logs\SystemLOG\system_<anno-mese>.log`, un file al mese): avvio e chiusura del programma con versione, Windows, .NET e lingua; adb; telefoni rilevati e scollegati; cartella di sessione aperta; errori imprevisti e crash, anche prima che compaia la finestra. Interfaccia grafica e riga di comando possono scriverci insieme (`[GUI]`, `[CLI]`).
+- **Stato della cartella log all'apertura**: numero di sessioni e dimensione totale, nel riquadro Stato e nel SystemLOG. Nessuna cancellazione automatica.
+- Menu *File → Apri cartella della sessione corrente*.
+
+### Altro
+- I log delle versioni precedenti restano dove sono.
+- Test: 126, di cui 14 nuovi (nome della cartella, lettura del nome del telefono anche con la vera mksh, sessioni, SystemLOG scritto da due programmi insieme, statistiche della cartella).
+
 ## v0.1.6 — 2026-10-16
 
 Risolve il "loop" dei file grandi (copia che si fermava intorno a 1,8–2,2 GB e ripartiva da zero). La causa, trovata con il diario della 0.1.5D, era il disco di destinazione del PC: alcune scritture restavano ferme da 5 a 55 s, il programma le scambiava per uno stallo del telefono, cancellava il parziale e ricominciava.

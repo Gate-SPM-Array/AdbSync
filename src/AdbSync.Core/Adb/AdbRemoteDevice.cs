@@ -79,6 +79,10 @@ public sealed class AdbRemoteDevice : IRemoteDevice
         }
     }
 
+    /// <summary>Produttore, modello, nome dato dall'utente e versione di Android (per il nome della cartella di sessione).</summary>
+    public async Task<DeviceIdentity> GetIdentityAsync(string fallbackModel, CancellationToken ct) =>
+        DeviceIdentity.Parse(await ShellAsync(DeviceIdentity.Command, ct, TimeSpan.FromSeconds(15)), fallbackModel);
+
     private async Task<string> ShellAsync(string command, CancellationToken ct, TimeSpan? timeout = null)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);

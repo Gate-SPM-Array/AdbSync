@@ -1,4 +1,4 @@
-# AdbSync v0.1.6
+# AdbSync v0.1.7
 
 **English** · [Italiano](README.it.md)
 
@@ -26,7 +26,7 @@ AdbSync\
   adbsync.ini      links used by the Help menu (project page, online help, issues)
   lang\en.json     English translation (add more languages here)
   data\settings.json
-  logs\            logs, CSV reports, nomi_convertiti_* lists, diagnostica_* folders
+  logs\            one folder per session + SystemLOG\ (see section 6)
   platform-tools\  adb.exe and DLLs (downloaded from Google)
 ```
 
@@ -34,7 +34,7 @@ If the folder is not writable (e.g. `C:\Program Files`) the program falls back t
 The adb authorization key stays in its standard Windows location (`%USERPROFILE%\.android`).
 To move or delete the program folder while adb is running: menu *adb… → Arresta il server adb* (stop the adb server).
 
-> The `AdbSync_v0.1.6_win-x64.zip` package requires the **.NET 10 Desktop Runtime x64**, available at https://dotnet.microsoft.com/download/dotnet/10.0
+> The `AdbSync_v0.1.7_win-x64.zip` package requires the **.NET 10 Desktop Runtime x64**, available at https://dotnet.microsoft.com/download/dotnet/10.0
 
 ## 2. Usage
 
@@ -124,7 +124,7 @@ To move or delete the program folder while adb is running: menu *adb… → Arre
   - the program's own temporary files.
 
   They can be changed with the *Esclusioni…* (Exclusions) button. Rules apply **relative to the chosen phone folder**: choosing `/sdcard/Pictures` excludes `.thumbnails/` inside it, choosing `/sdcard/Pictures/.thumbnails` itself does not. Excluded files are counted in the compare summary and shown with the *Excluded* filter, so a "nothing to copy" result is never a mystery.
-- **Converted names list**: every sync with converted names writes `logs\nomi_convertiti_<date>.txt` with type, original phone path, PC path, outcome and the substitutions spelled out, e.g. `"?" → "？" (U+FF1F)` (folders included), so you can always trace a file back to its original name.
+- **Converted names list**: every sync with converted names writes `nomi_convertiti_<date>.txt` in the session folder with type, original phone path, PC path, outcome and the substitutions spelled out, e.g. `"?" → "？" (U+FF1F)` (folders included), so you can always trace a file back to its original name.
 
 The *Stato* (Status) panel can be resized by dragging the splitter above it, and its size is remembered. The active-transfers list always shows all parallel transfers.
 
@@ -141,7 +141,7 @@ The *Stato* (Status) panel can be resized by dragging the splitter above it, and
 | PC disk write timeout (*Strumenti* menu) | 120 s | minimum 30 s; a disk write slower than this closes the transfer and requeues the file |
 | Extra retries (*Tentativi extra*) | 5 | |
 | Align same-size dates (*Allinea date stessa dimensione*) | No | No / Size only / Quick check / Full MD5 check |
-| Diagnostic mode (*Modalità diagnostica*) | no | on every compare, saves to `logs\diagnostica_<date>\` the full phone listing, the PC listing, the plan with the reason for every decision, and the raw phone messages |
+| Diagnostic mode (*Modalità diagnostica*) | no | on every compare, saves to `diagnostica_<date>\` in the session folder the full phone listing, the PC listing, the plan with the reason for every decision, and the raw phone messages |
 
 ## 5. Command line
 
@@ -159,10 +159,23 @@ Exit codes: `0` everything done · `1` errors on some files · `2` aborted or in
 
 ## 6. Logs and reports
 
-- Full log of every session: `logs\adbsync_YYYYMMDD_hhmmss.log` in the program folder.
-- CSV report of every sync, opens in Excel: `report_YYYYMMDD_hhmmss.csv`, with the outcome of each file.
+- **One folder per session.** A session starts when the program is open and a phone is connected, and lasts while the program stays open with the same phone (a disconnection during the copy does not start a new one). Every `adbsync-cli` run is a session too.
+  ```
+  logs\
+    2026-10-16_14-30-05_Xiaomi-2201117TG_Telefono-di-David\
+      sessione.log                     everything that happened in the session
+      report_YYYYMMDD_hhmmss.csv       one per sync, opens in Excel, outcome of each file
+      nomi_convertiti_YYYYMMDD_hhmmss.txt
+      diagnostica_YYYYMMDD_hhmmss\     diagnostic mode only
+    SystemLOG\
+      system_YYYY-MM.log               one file per month
+  ```
+  The folder name is date and time (so the folders sort chronologically), manufacturer and model, and the name given to the phone in Android settings (or its Bluetooth name). Characters not valid on Windows become `-`. The serial number is never used, except its last 4 characters when two phones of the same model are connected.
+- **SystemLOG**: what is not part of a copy session — program start and close (version, Windows, .NET, language, migrations), adb (path, server, errors, unauthorized phone), phones detected and disconnected, which session folder was opened, unexpected errors and crashes, also before the window appears. The GUI and the command line can write to it at the same time; each line says which one (`[GUI]`, `[CLI]`).
+- **Nothing is deleted automatically.** At startup the program shows how many sessions the log folder holds and its total size (status panel and SystemLOG); delete old sessions yourself when you want. Menu *File*: *Apri cartella log e report* (log folder) and *Apri cartella della sessione corrente* (current session).
+- Logs of versions before 0.1.7 stay where they are (directly in `logs\`).
 - Settings: `data\settings.json` in the program folder.
-- Diagnostic mode: `logs\diagnostica_YYYYMMDD_hhmmss\` with `1_telefono.tsv` (phone), `2_pc.tsv`, `3_piano.tsv` (plan) and `4_messaggi_telefono.txt` (phone messages).
+- Diagnostic mode: `diagnostica_YYYYMMDD_hhmmss\` in the session folder, with `1_telefono.tsv` (phone), `2_pc.tsv`, `3_piano.tsv` (plan) and `4_messaggi_telefono.txt` (phone messages).
 
 ## 7. Known limitations of this version
 
@@ -184,7 +197,7 @@ src/AdbSync.Core   engine: scan, compare, robust copy (cross-platform)
 src/AdbSync.Gui    Windows Forms user interface
 src/AdbSync.Cli    command line
 lang/              translation files (en.json = reference)
-tests/             112 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
+tests/             126 tests, including a simulated phone with faults (stalls, disconnects, truncated copies, ...)
 ```
 
 Build: .NET 10 SDK → `dotnet build`. Tests: `dotnet test`.

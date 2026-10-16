@@ -5,7 +5,7 @@ namespace AdbSync.Cli;
 
 internal static class Program
 {
-    private const string AppVersion = "0.1.6";
+    private const string AppVersion = "0.1.7";
 
     private static async Task<int> Main(string[] args)
     {
@@ -57,6 +57,9 @@ internal static class Program
         try { a = Args.Parse(args); }
         catch (ArgumentException ex) { Console.Error.WriteLine(L.F("Errore: {0}", ex.Message)); Console.Error.WriteLine(L.T("Usa --help per l'elenco delle opzioni.")); return 3; }
 
+        using var log = SyncLogger.ForApplication(AppPaths.LogDirectory, "CLI");
+        log.System(LogLevel.Info, L.F("adbsync-cli {0}: comando {1}", AppVersion, a.Command), notify: false);
+        foreach (var m in langMessages) log.System(LogLevel.Warning, m, notify: false);
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
         {
@@ -68,7 +71,7 @@ internal static class Program
 
         try
         {
-            foreach (var m in AppPaths.MigrateLegacy()) Console.WriteLine(m);
+            foreach (var m in AppPaths.MigrateLegacy()) { Console.WriteLine(m); log.System(LogLevel.Info, m, notify: false); }
             if (a.Command == "setup-adb")
             {
                 var path = await AdbEnvironment.DownloadPlatformToolsAsync(new InlineProgress<string>(Console.WriteLine), cts.Token);
@@ -83,6 +86,7 @@ internal static class Program
                 return 3;
             }
             var env = await AdbEnvironment.StartAsync(adbPath, cts.Token);
+            log.System(LogLevel.Info, L.F("adb in uso: {0}", adbPath), notify: false);
 
             var devices = await env.GetDevicesAsync(cts.Token);
             if (a.Command == "devices")
@@ -110,14 +114,28 @@ internal static class Program
                 return 3;
             }
 
-            using var log = new SyncLogger(SyncLogger.DefaultLogDirectory);
+            var device = env.OpenDevice(dev.Serial, dev.ToString());
+            DeviceIdentity id;
+            try
+            {
+                using var idCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+                idCts.CancelAfter(TimeSpan.FromSeconds(20));
+                id = await device.GetIdentityAsync(dev.Model, idCts.Token);
+            }
+            catch (Exception ex) when (!cts.IsCancellationRequested)
+            {
+                id = DeviceIdentity.Fallback(dev.Model);
+                log.System(LogLevel.Warning, L.F("Nome del telefono non letto ({0}): la cartella di sessione usa solo il modello.", ex.Message), notify: false);
+            }
+            bool twin = devices.Any(o => o.Serial != dev.Serial && o.Model == dev.Model);
+            log.StartSession(LogSessions.FolderName(DateTime.Now, id, twin ? LogSessions.SerialSuffix(dev.Serial) : null));
+            log.Info(L.F("adbsync-cli {0} — telefono: {1}", AppVersion, id.Describe()));
             log.EntryWritten += e =>
             {
                 if (e.Level == LogLevel.Debug) return;
                 ClearStatusLine();
                 (e.Level >= LogLevel.Warning ? Console.Error : Console.Out).WriteLine(e.ToString());
             };
-            var device = env.OpenDevice(dev.Serial, dev.ToString());
             var options = a.ToOptions();
 
             var plan = await SyncEngine.CompareAsync(device, a.Remote, a.Local, options, log, StatusLine, cts.Token);
@@ -165,6 +183,7 @@ internal static class Program
         {
             ClearStatusLine();
             Console.Error.WriteLine(ex.Message);
+            log.System(LogLevel.Error, ex.Message, notify: false);
             return 2;
         }
         catch (OperationCanceledException)
@@ -182,6 +201,7 @@ internal static class Program
         {
             ClearStatusLine();
             Console.Error.WriteLine(L.F("Errore: {0}", ex.Message));
+            log.System(LogLevel.Error, L.F("Errore imprevisto: {0}", ex), notify: false);
             return 2;
         }
     }

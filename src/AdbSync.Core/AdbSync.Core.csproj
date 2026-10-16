@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>AdbSync.Core</RootNamespace>
-    <Version>0.1.6</Version>
+    <Version>0.1.7</Version>
     <Product>AdbSync</Product>
     <Company>DGR – ICT GRC Consulting</Company>
   </PropertyGroup>
